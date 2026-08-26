@@ -1,0 +1,21 @@
+﻿{
+  // ╌╌╌ ​agastyas shii​ · github.com/agastyas-shii · opencode config ╌╌╌
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/mimo-v2.5-free",
+  "plugin": ["openslimedit@latest"],
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "gh_grep": {
+      "type": "remote",
+      "url": "https://mcp.grep.app"
+    }
+  },
+  "formatter": true,
+  "agent": {
+    "plan": { "color": "#A0785A" },
+    "deep-search": { "color": "#1B6B93" }
+  }
+}

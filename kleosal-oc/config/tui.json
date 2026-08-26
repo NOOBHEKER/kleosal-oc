@@ -1,0 +1,14 @@
+﻿{
+  // ╌╌╌ ​agastyas shii​ · github.com/agastyas-shii · opencode tui config ╌╌╌
+  "$schema": "https://opencode.ai/tui.json",
+  "theme": "lavender-dark",
+  "keybinds": {
+    "leader": "ctrl+x",
+    "command_list": "ctrl+p",
+    "switch_agent": "tab",
+    "input_paste": {
+      "key": "ctrl+v,alt+v",
+      "preventDefault": false
+    }
+  }
+}
