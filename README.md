@@ -1,2 +1,3 @@
-# kleosal-oc
+# kleosal-oc and cowork
 Turns the barebones opencode CLI into a full productivity machine. Free vision model, research agents, goal tracking, secret protection, custom theme, desktop notifications, code review workflows, and release automation. No 3-hour setup. Copy, install, done. Built for devs who want tools that work.
+Opencode-cowork-kit gives you the Cowork experience without the subscription. A custom screen-capture MCP lets the AI see your desktop on demand and auto-type responses straight into Gmail, CMD, or any focused window. Bundled memory remembers your preferences across sessions, sequential thinking plans multi-step work, and Crawlbase + Context7 + grep.app cover scraping, docs, and code search. One install.bat deploys it all on any Windows machine — free forever.
