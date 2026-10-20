@@ -69,6 +69,7 @@ export const DEFAULT_CONFIG = {
   frames: null,
   colorMap: null,
   background: null,
+  wordmark: null,
 }
 
 function clamp(value, min, max, fallback) {
@@ -183,12 +184,20 @@ export function normalizeConfig(input) {
       typeof source.background === "string" && HEX.test(source.background)
         ? source.background.toLowerCase()
         : null,
+    wordmark:
+      typeof source.wordmark === "string" && source.wordmark.trim()
+        ? source.wordmark.trim().replace(/[^\w .-]/g, "").slice(0, 16) || null
+        : null,
   }
 }
 
 export function readConfig() {
   try {
-    return normalizeConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")))
+    // Editors on Windows (Notepad, PowerShell 5's Set-Content -Encoding UTF8)
+    // often prepend a UTF-8 BOM. JSON.parse rejects it, which used to make the
+    // plugin silently fall back to defaults and ignore every user setting.
+    const raw = readFileSync(CONFIG_PATH, "utf8").replace(/^\uFEFF/, "")
+    return normalizeConfig(JSON.parse(raw))
   } catch {
     return normalizeConfig(DEFAULT_CONFIG)
   }

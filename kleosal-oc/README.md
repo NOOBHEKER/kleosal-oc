@@ -36,7 +36,7 @@ Restart opencode afterwards.
 | **Rules** | `rules/AGENTS.md` | Global behavior rules for all agents |
 | **Skills** | `skills/git-release/`, `skills/code-review/` | Release notes + structured code review |
 | **Plugins** | `plugins/` | Attribution watermark, .env protection, desktop notifications |
-| **Cover art** | `plugins/cover-art/` | Full-screen theme rain, readable wordmark, `/art` picker, optional MCP |
+| **Cover art** | `plugins/cover-art/` | Full-screen theme rain, readable wordmark (stock or custom OMENCODE), `/art` picker, optional MCP |
 | **Theme** | `themes/lavender-dark.json` | Dark lavender color scheme |
 | **Docs** | `docs/` | Setup guides for font, plugins, model, troubleshooting |
 
@@ -49,7 +49,8 @@ Restart opencode afterwards.
 <sub>Still preview: [cover-art-full.png](previews/cover-art-full.png)</sub>
 
 The home screen gets a full-screen, theme-adaptive digital rain while the real
-`opencode` wordmark stays readable. Rain is cut out around the wordmark, prompt,
+`opencode` wordmark stays readable (or set `"wordmark": "OMENCODE"` for a custom
+block wordmark). Rain is cut out around the wordmark, prompt,
 tab bar, footer, and scrollbar, so nothing ever sits behind text. Only the home
 screen changes; conversations are untouched.
 

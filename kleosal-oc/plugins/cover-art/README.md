@@ -39,9 +39,14 @@ and the MCP server stay in sync.
 | `matrix-wordmark` | Same rain with a slow breathing/shimmer on the wordmark |
 | `wordmark` | Ghost wordmark only, with a slow shimmer |
 
-The wordmark in every preset is the **stock OpenCode logo**, not a redrawn copy. It
+By default every preset uses the **stock OpenCode logo**, not a redrawn copy. It
 keeps its exact glyphs, shadows, and theme colours, so it always reads `opencode`
 and follows theme changes. Only its opacity is reduced.
+
+Set `"wordmark": "OMENCODE"` (or any 1–16 character label) to replace it with a
+custom four-row block wordmark. The stock logo is hidden while the custom wordmark
+is active, and the custom glyphs are painted in the post-process layer as well, so
+they cannot intercept mouse events either.
 
 The rain uses `theme.text` tokens, so it adapts to light/dark themes automatically.
 It is painted straight into the renderer's frame buffer with
@@ -49,11 +54,16 @@ It is painted straight into the renderer's frame buffer with
 node at all**, so it cannot swallow a tab click, a mouse-wheel event, a dialog
 click, or a text selection. A mask keeps it out of every text area.
 
+The rain frame is flattened into non-space glyph cells once per animation tick, and
+colour objects are packed once per alpha instead of once per cell. The post-process
+therefore skips the full screen of spaces on every repaint. `fps: 12` is a good
+smooth default on a normal terminal; lower it if you want even less CPU.
+
 ## Using it
 
 - `/art` (or the "Cover art" command palette entry) opens a picker with presets,
-  wordmark and rain faintness, full-screen vs. left-panel layout, custom frames,
-  enable/disable, and reset.
+  custom or stock wordmark, rain faintness, full-screen vs. left-panel layout,
+  custom frames, enable/disable, and reset.
 - Changes apply within about half a second; no TUI restart is needed.
 
 Config file:
@@ -80,7 +90,8 @@ On Windows: `C:\Users\<you>\.config\opencode\cover-art.json`.
   "palette": ["#6B7280", "#9CA3AF", "#D1D5DB", "#E5E7EB"],
   "frames": null,
   "colorMap": null,
-  "background": null
+  "background": null,
+  "wordmark": null
 }
 ```
 

@@ -11,12 +11,36 @@ import {
   readConfig,
   writeConfig,
 } from "./shared.mjs"
-import { createEngine, renderFrames, renderMatrix, type ArtFrame } from "./engine"
+import { createEngine, renderFrames, renderMatrix, renderWordmark, type ArtFrame } from "./engine"
 
 const MATRIX_ID = "cover-art.matrix"
 const ART_ID = "cover-art.art"
 
 const EMPTY: ArtFrame = { rows: [], width: 0, height: 0 }
+
+type PaintGlyph = { x: number; y: number; char: string; color: any }
+
+// The post-process runs on every UI frame, while the rain itself only changes at
+// the configured fps. Flatten the frame once per rain tick so the draw callback
+// never walks a full screen of spaces on every repaint.
+function collectGlyphs(frame: ArtFrame, offsetX = 0, offsetY = 0): PaintGlyph[] {
+  const glyphs: PaintGlyph[] = []
+  for (let y = 0; y < frame.rows.length; y += 1) {
+    const row = frame.rows[y]!
+    let x = 0
+    for (const span of row) {
+      const text = span?.text ?? ""
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index]!
+        if (char !== " ") {
+          glyphs.push({ x: offsetX + x + index, y: offsetY + y, char, color: span?.color })
+        }
+      }
+      x += text.length
+    }
+  }
+  return glyphs
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
@@ -213,6 +237,8 @@ function CoverArt() {
   const plugin: any = usePlugin()
   const [config, setConfig] = createSignal(readConfig())
   const [matrixFrame, setMatrixFrame] = createSignal<ArtFrame>(EMPTY)
+  const [matrixGlyphs, setMatrixGlyphs] = createSignal<PaintGlyph[]>([])
+  const [artGlyphs, setArtGlyphs] = createSignal<PaintGlyph[]>([])
   const [artFrame, setArtFrame] = createSignal<ArtFrame>(EMPTY)
   const [matrixX, setMatrixX] = createSignal(0)
   const [matrixY, setMatrixY] = createSignal(0)
@@ -279,30 +305,58 @@ function CoverArt() {
     // never steal a tab click, a wheel event, a dialog click, or a selection.
     if (!renderer?.addPostProcessFn) return
     const transparent = packColor(null, 0)
+    let rainAlpha = -1
+    let rainColors = new Map<any, any>()
+    let wordmarkAlpha = -1
+    let wordmarkColors = new Map<any, any>()
     const paint = (buffer: any) => {
       const configValue = config()
-      if (!active() || !configValue.enabled || configValue.effect !== "matrix") return
-      if (modalOpen() || !matrixOn()) return
-      const alpha = clamp(Number(configValue.rainOpacity) || 0, 0, 1)
-      if (alpha <= 0) return
-      const frame = matrixFrame()
-      if (!frame.rows.length) return
-      const originX = matrixX()
-      const originY = matrixY()
-      for (let y = 0; y < frame.rows.length; y += 1) {
-        const row = frame.rows[y]!
-        let column = 0
-        for (const span of row) {
-          const text = span?.text ?? ""
-          const fg = packColor(span?.color, alpha)
-          for (let i = 0; i < text.length; i += 1) {
-            const char = text[i]!
-            const x = originX + column
-            const py = originY + y
-            column += 1
-            if (char === " " || x < 0 || py < 0) continue
-            buffer.setCellWithAlphaBlending(x, py, char, fg, transparent)
+      if (!active() || !configValue.enabled || modalOpen()) return
+      const width = Number(buffer.width)
+      const height = Number(buffer.height)
+      const draw = (
+        glyphs: PaintGlyph[],
+        originX: number,
+        originY: number,
+        alpha: number,
+        colors: Map<any, any>,
+      ) => {
+        for (const glyph of glyphs) {
+          const x = originX + glyph.x
+          const y = originY + glyph.y
+          if (x < 0 || y < 0 || x >= width || y >= height) continue
+          let fg = colors.get(glyph.color)
+          if (!fg) {
+            fg = packColor(glyph.color, alpha)
+            colors.set(glyph.color, fg)
           }
+          buffer.setCellWithAlphaBlending(x, y, glyph.char, fg, transparent)
+        }
+      }
+
+      if (configValue.effect === "matrix" && matrixOn()) {
+        const alpha = clamp(Number(configValue.rainOpacity) || 0, 0, 1)
+        if (alpha > 0) {
+          if (rainAlpha !== alpha) {
+            rainAlpha = alpha
+            rainColors = new Map()
+          }
+          draw(matrixGlyphs(), matrixX(), matrixY(), alpha, rainColors)
+        }
+      }
+
+      // The custom wordmark is painted here, after the rain and after every
+      // renderable. That makes it independent of z-index/background painting and
+      // still leaves it with no hit-test node of its own.
+      const wordmark = artGlyphs()
+      if (wordmark.length) {
+        const alpha = clamp(Number(configValue.opacity) || 0, 0, 1)
+        if (alpha > 0) {
+          if (wordmarkAlpha !== alpha) {
+            wordmarkAlpha = alpha
+            wordmarkColors = new Map()
+          }
+          draw(wordmark, 0, 0, alpha, wordmarkColors)
         }
       }
     }
@@ -317,6 +371,7 @@ function CoverArt() {
     if (!home || !configValue.enabled) {
       restore()
       setMatrixOn(false)
+      setArtGlyphs([])
       setArtOn(false)
       return
     }
@@ -341,6 +396,7 @@ function CoverArt() {
       if (failures >= 3) {
         restore()
         setMatrixOn(false)
+        setArtGlyphs([])
         setArtOn(false)
       }
     }
@@ -361,6 +417,7 @@ function CoverArt() {
     }
     if (!logo) {
       setMatrixOn(false)
+      setArtGlyphs([])
       setArtOn(false)
       return
     }
@@ -368,7 +425,7 @@ function CoverArt() {
       promptBox = findPromptBox(root)
       lastPromptScan = now
     }
-    if (now - lastModalScan > 250) {
+    if (now - lastModalScan > 500) {
       setModalOpen(hasModal(root))
       lastModalScan = now
     }
@@ -392,10 +449,11 @@ function CoverArt() {
         if (logo.opacity !== 0) logo.opacity = 0
       } catch {}
       setMatrixFrame(EMPTY)
+      setMatrixGlyphs([])
       setMatrixOn(false)
+      setArtGlyphs([])
       setArtFrame(art)
 
-      let artReady = false
       if (art.width > 0 && artEl.width > 0 && artEl.height > 0) {
         const desiredX = logo.x + (logo.width - art.width) / 2
         const desiredY = logo.y + (logo.height - art.height) / 2
@@ -408,23 +466,46 @@ function CoverArt() {
           artPos.top = next.top
           setArtTop(next.top)
         }
-        artReady = true
       }
-      setArtOn(artReady)
+      // Keep the canvas laid out even before its first measurement, otherwise
+      // `display: none` would leave width 0 forever and the art could never
+      // become visible. It is placed on the next rain tick.
+      setArtOn(art.width > 0)
       return
     }
 
     // Presets keep the real wordmark: dimming it preserves its exact glyphs,
     // shadows, and theme colours (no hand-drawn wordmark to misspell).
-    const pulse = configValue.shimmer ? 0.9 + 0.1 * Math.sin((now / 1000) * 1.6) : 1
-    const target = clamp(configValue.opacity * pulse, 0.05, 1)
-    try {
-      if (Math.abs((logo.opacity ?? 1) - target) > 0.01) logo.opacity = target
-    } catch {}
+    const customWordmark = configValue.wordmark
+      ? renderWordmark(configValue.wordmark, theme)
+      : undefined
+    if (customWordmark && customWordmark.width > 0) {
+      try {
+        if (logo.opacity !== 0) logo.opacity = 0
+      } catch {}
+      const desiredX = Math.max(
+        0,
+        Math.round(logo.x + (logo.width - customWordmark.width) / 2),
+      )
+      const desiredY = Math.max(
+        0,
+        Math.round(logo.y + (logo.height - customWordmark.height) / 2),
+      )
+      setArtGlyphs(collectGlyphs(customWordmark, desiredX, desiredY))
+      setArtOn(false)
+      setArtFrame(EMPTY)
+    } else {
+      const pulse = configValue.shimmer ? 0.9 + 0.1 * Math.sin((now / 1000) * 1.6) : 1
+      const target = clamp(configValue.opacity * pulse, 0.05, 1)
+      try {
+        if (Math.abs((logo.opacity ?? 1) - target) > 0.01) logo.opacity = target
+      } catch {}
+      setArtGlyphs([])
+      setArtOn(false)
+      setArtFrame(EMPTY)
+    }
 
-    setArtOn(false)
-    setArtFrame(EMPTY)
-
+    setMatrixGlyphs([])
     let matrix: ArtFrame | undefined
     if (configValue.effect === "matrix") {
       if (configValue.fullscreen) {
@@ -470,6 +551,7 @@ function CoverArt() {
           mask,
         })
         setMatrixFrame(matrix)
+        setMatrixGlyphs(collectGlyphs(matrix))
       } else {
         const bottom = Math.round(logo.y) + 5
         const height = Math.max(
@@ -480,6 +562,7 @@ function CoverArt() {
         if (width >= 8 && height >= 4) {
           matrix = renderMatrix(matrixEngine, configValue, theme, now, width, height)
           setMatrixFrame(matrix)
+          setMatrixGlyphs(collectGlyphs(matrix))
         }
       }
     }
@@ -556,6 +639,18 @@ async function openMenu(plugin: any) {
       category: "Layout",
     },
     {
+      title: current.wordmark === "OMENCODE" ? "✓ Wordmark: OMENCODE" : "Wordmark: OMENCODE",
+      value: "wordmark:OMENCODE",
+      description: "Use a custom block wordmark instead of the stock logo",
+      category: "Wordmark",
+    },
+    {
+      title: current.wordmark ? "Use stock opencode logo" : "✓ Stock opencode logo",
+      value: "wordmark:stock",
+      description: "Keep the real OpenCode wordmark and only dim it",
+      category: "Wordmark",
+    },
+    {
       title: "Custom frames from file…",
       value: "custom",
       description: "Load a JSON file with an animated frame sequence",
@@ -620,6 +715,17 @@ async function openMenu(plugin: any) {
       plugin.ui.toast.show({
         title: "Cover art",
         message: fullscreen ? "Full-screen background" : "Left-side panel",
+        variant: "success",
+      })
+      return
+    }
+
+    if (picked.startsWith("wordmark:")) {
+      const value = picked.slice("wordmark:".length)
+      writeConfig({ ...current, wordmark: value === "stock" ? null : value })
+      plugin.ui.toast.show({
+        title: "Cover art",
+        message: value === "stock" ? "Stock wordmark" : `Wordmark: ${value}`,
         variant: "success",
       })
       return

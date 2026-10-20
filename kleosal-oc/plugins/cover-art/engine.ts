@@ -88,6 +88,42 @@ function toFrame(cells: Array<Array<{ char: string; color?: any } | undefined>>,
   return { rows, width, height: rows.length }
 }
 
+// A compact four-row block font for the optional custom wordmark. Four rows
+// matches the stock OpenCode logo, so the rain mask and the logo slot stay the
+// same; only the letterforms change.
+const WORDMARK_FONT: Record<string, string[]> = {
+  O: ["████", "█  █", "█  █", "████"],
+  M: ["█   █", "██ ██", "█ █ █", "█   █"],
+  E: ["████", "█   ", "███ ", "████"],
+  N: ["█  █", "██ █", "█ ██", "█  █"],
+  C: ["████", "█   ", "█   ", "████"],
+  D: ["███ ", "█  █", "█  █", "███ "],
+  " ": ["  ", "  ", "  ", "  "],
+}
+
+function wordmarkGlyph(char: string): string[] {
+  return WORDMARK_FONT[char] ?? ["███", "█ █", "█ █", "███"]
+}
+
+export function renderWordmark(text: string, theme: any): ArtFrame {
+  const chars = [...String(text).toUpperCase()].slice(0, 16)
+  if (chars.length === 0) return { rows: [], width: 0, height: 0 }
+  const rows = ["", "", "", ""]
+  for (let index = 0; index < chars.length; index += 1) {
+    const glyph = wordmarkGlyph(chars[index]!)
+    for (let row = 0; row < 4; row += 1) {
+      rows[row] += glyph[row]!
+      if (index < chars.length - 1) rows[row] += " "
+    }
+  }
+  const color = themeText(theme, "base", "#E5E7EB")
+  return {
+    rows: rows.map((line) => [{ text: line, color }]),
+    width: Math.max(...rows.map((line) => line.length)),
+    height: 4,
+  }
+}
+
 export function createEngine(): Engine {
   return { key: "", width: 0, height: 0, last: 0, columns: [] }
 }
