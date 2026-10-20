@@ -282,7 +282,7 @@ function CoverArt() {
     const paint = (buffer: any) => {
       const configValue = config()
       if (!active() || !configValue.enabled || configValue.effect !== "matrix") return
-      if (modalOpen()) return
+      if (modalOpen() || !matrixOn()) return
       const alpha = clamp(Number(configValue.rainOpacity) || 0, 0, 1)
       if (alpha <= 0) return
       const frame = matrixFrame()
