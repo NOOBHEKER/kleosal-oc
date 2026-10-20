@@ -44,8 +44,10 @@ keeps its exact glyphs, shadows, and theme colours, so it always reads `opencode
 and follows theme changes. Only its opacity is reduced.
 
 The rain uses `theme.text` tokens, so it adapts to light/dark themes automatically.
-Its canvas is drawn at `zIndex` 900, below the prompt (`zIndex` 1000), and the
-mask keeps it out of every text area.
+It is painted straight into the renderer's frame buffer with
+`renderer.addPostProcessFn`, not as a layout overlay. That gives it **no hit-test
+node at all**, so it cannot swallow a tab click, a mouse-wheel event, a dialog
+click, or a text selection. A mask keeps it out of every text area.
 
 ## Using it
 
@@ -112,6 +114,15 @@ and below it above the footer — so the screen feels covered without ever putti
 glyphs behind text. Custom frames still replace the wordmark area and hide the
 stock logo.
 
+### Mouse safety
+
+Earlier versions drew the rain as a full-screen `box` at `zIndex` 900. OpenTUI
+hit-tests renderables even when they have no mouse handler, so that box sat above
+the session tab strip (`zIndex` 1) and scrollboxes and blocked tab clicks, wheel
+scrolling, and dialog clicks. The rain is now post-processed into the buffer, so
+there is no overlay to hit. This is the permanent fix; no per-route z-index
+juggling is involved.
+
 ## Custom frames
 
 `set_frames` (or `/art` → "Custom frames from file…") replaces the wordmark area
@@ -170,15 +181,19 @@ The Kleosal OC installer prints the exact entry with your path.
 
 ## How it works
 
-- `tui.tsx` mounts a small `app`-slot overlay, locates the stock logo in the
-  render tree, and dims it with `opacity` (setting `visible = false` would collapse
-  its wrapper and shift the layout).
-- In full-screen mode the rain canvas covers the terminal. A mask excludes the
-  wordmark, the prompt container (found from the "Ask anything…" placeholder,
-  with a geometric fallback), the top tab bar, the footer, and the scrollbar.
-- The rain canvas and custom-frame canvas are absolutely positioned overlays with
-  self-calibrating origins; they are repositioned when the logo or terminal size
-  changes.
+- `tui.tsx` locates the stock logo in the render tree and dims it with `opacity`
+  (setting `visible = false` would collapse its wrapper and shift the layout).
+- In full-screen mode the rain is generated as text spans and painted directly
+  into the frame buffer by a post-process callback. A mask excludes the wordmark,
+  the prompt container (found from the "Ask anything…" placeholder, with a
+  geometric fallback), the top tab bar, the footer, and the scrollbar.
+- Because the rain is post-processed, it has no renderable and no z-index. There
+  is nothing for OpenTUI's mouse hit test to select, so tabs, scrollboxes, and
+  dialogs keep working normally. The callback is removed on cleanup and is also
+  skipped while a dialog or menu is open.
+- Custom frames still use a small absolutely positioned canvas around the
+  wordmark. That canvas sits at `zIndex` 0 (below tabs `zIndex` 1 and the prompt
+  `zIndex` 1000) and is hidden with `visible = false` when inactive.
 - `engine.ts` draws the rain and frame art as coloured spans, using theme tokens
   for presets and `palette`/`colorMap` for custom frames. Full-screen columns use
   short, slow trails so the background stays calm.

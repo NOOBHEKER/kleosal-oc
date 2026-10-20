@@ -35,7 +35,12 @@ function pick<T>(list: readonly T[]): T {
 }
 
 function themeText(theme: any, key: "base" | "muted", fallback: string) {
-  return theme?.text?.[key] ?? fallback
+  // The TUI has shipped both `theme.text.base` (older payloads) and a flat
+  // `theme.text` RGBA colour (current). Accept either shape so the rain follows
+  // the active theme instead of silently falling back to a fixed grey.
+  const current = theme?.current ?? theme
+  if (key === "base") return current?.text?.base ?? current?.text ?? fallback
+  return current?.textMuted?.base ?? current?.textMuted ?? current?.text?.muted ?? fallback
 }
 
 function makeColumn(height: number, full: boolean): MatrixColumn {
