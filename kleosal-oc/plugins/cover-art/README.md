@@ -25,7 +25,8 @@ irm https://raw.githubusercontent.com/NOOBHEKER/kleosal-oc/main/install.ps1 | ie
 ```
 
 Or copy this `cover-art/` folder into `~/.config/opencode/plugins/` and restart
-OpenCode. The `/art` picker appears automatically; the MCP server is optional.
+OpenCode (on Windows: `C:\Users\<you>\.config\opencode\plugins\`). The `/art`
+picker appears automatically; the MCP server is optional.
 
 Everything is driven by the same small JSON config, so the TUI, the `/art` picker,
 and the MCP server stay in sync.
