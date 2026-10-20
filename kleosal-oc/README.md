@@ -6,6 +6,26 @@ A collection of opencode CLI improvements: custom agents, commands, rules, skill
 
 ---
 
+## One-command install
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/NOOBHEKER/kleosal-oc/main/install.ps1 | iex
+```
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NOOBHEKER/kleosal-oc/main/install.sh | bash
+```
+
+The installer backs up your existing config, copies the pack, and keeps your
+`opencode.jsonc` / `tui.json` (the pack versions are saved as reference copies).
+Restart opencode afterwards.
+
+---
+
 ## What's included
 
 | Category | Files | Description |
@@ -16,24 +36,54 @@ A collection of opencode CLI improvements: custom agents, commands, rules, skill
 | **Rules** | `rules/AGENTS.md` | Global behavior rules for all agents |
 | **Skills** | `skills/git-release/`, `skills/code-review/` | Release notes + structured code review |
 | **Plugins** | `plugins/` | Attribution watermark, .env protection, desktop notifications |
+| **Cover art** | `plugins/cover-art/` | Full-screen theme rain, readable wordmark, `/art` picker, optional MCP |
 | **Theme** | `themes/lavender-dark.json` | Dark lavender color scheme |
 | **Docs** | `docs/` | Setup guides for font, plugins, model, troubleshooting |
 
 ---
 
+## Cover art
+
+![Cover art preview](previews/cover-art.gif)
+
+<sub>Still preview: [cover-art-full.png](previews/cover-art-full.png)</sub>
+
+The home screen gets a full-screen, theme-adaptive digital rain while the real
+`opencode` wordmark stays readable. Rain is cut out around the wordmark, prompt,
+tab bar, footer, and scrollbar, so nothing ever sits behind text. Only the home
+screen changes; conversations are untouched.
+
+| Preset | Look |
+| --- | --- |
+| `matrix` | Full-screen rain + readable tinted wordmark (default) |
+| `matrix-wordmark` | Same rain, with a slow breathing wordmark |
+| `wordmark` | Ghost wordmark only, with a slow shimmer |
+
+- `/art` switches presets, wordmark and rain faintness, full-screen or left-panel
+  layout, and custom frames.
+- Config lives in `~/.config/opencode/cover-art.json`; zero npm dependencies.
+- Optional MCP tools let agents change presets and options.
+
+Details: [`plugins/cover-art/README.md`](plugins/cover-art/README.md).
+
+---
+
 ## Quick start
+
+Prefer the one-command install above. The manual steps below copy the pack files
+over your existing setup, so back up `~/.config/opencode/` first.
 
 ### 1. Copy config files
 
 ```bash
 # Windows (PowerShell)
-Copy-Item "config\*" "$env:USERPROFILE\.config\opencode\"
-Copy-Item "agents\*" "$env:USERPROFILE\.config\opencode\agents\"
-Copy-Item "commands\*" "$env:USERPROFILE\.config\opencode\commands\"
-Copy-Item "rules\*" "$env:USERPROFILE\.config\opencode\rules\"
-Copy-Item "skills\*" "$env:USERPROFILE\.config\opencode\skills\"
-Copy-Item "themes\*" "$env:USERPROFILE\.config\opencode\themes\"
-Copy-Item "plugins\*" "$env:USERPROFILE\.config\opencode\plugins\"
+Copy-Item "config\*" "$env:USERPROFILE\.config\opencode\" -Recurse
+Copy-Item "agents\*" "$env:USERPROFILE\.config\opencode\agents\" -Recurse
+Copy-Item "commands\*" "$env:USERPROFILE\.config\opencode\commands\" -Recurse
+Copy-Item "rules\*" "$env:USERPROFILE\.config\opencode\rules\" -Recurse
+Copy-Item "skills\*" "$env:USERPROFILE\.config\opencode\skills\" -Recurse
+Copy-Item "themes\*" "$env:USERPROFILE\.config\opencode\themes\" -Recurse
+Copy-Item "plugins\*" "$env:USERPROFILE\.config\opencode\plugins\" -Recurse
 
 # macOS / Linux
 cp -r config/* ~/.config/opencode/

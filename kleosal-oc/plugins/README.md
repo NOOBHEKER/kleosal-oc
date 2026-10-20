@@ -1,6 +1,8 @@
 # Plugins
 
-This folder contains three opencode plugins. They require the `@opencode-ai/plugin` SDK to be installed.
+This folder contains the pack's opencode plugins: three server-side `.js` plugins
+(which require the `@opencode-ai/plugin` SDK) and the zero-dependency
+`cover-art/` TUI plugin.
 
 ## What each plugin does
 
@@ -9,10 +11,14 @@ This folder contains three opencode plugins. They require the `@opencode-ai/plug
 | `attribution.js` | Prints a subtle attribution line when opencode starts (run-time watermark) | Any |
 | `env-protection.js` | Blocks opencode from reading `.env` files (secrets protection) | Any |
 | `notifications.js` | Shows a Windows MessageBox when a session goes idle | Windows only |
+| `cover-art/` | Full-screen theme rain, readable wordmark, `/art` picker, optional MCP | Any |
+
+![Cover art preview](../previews/cover-art.gif)
 
 ## Setup
 
-1. Install dependencies (run from the `plugins/` folder or your opencode config root):
+1. Install dependencies for the `.js` plugins (run from the `plugins/` folder or
+   your opencode config root). `cover-art/` has no npm dependencies:
    ```bash
    npm install @opencode-ai/plugin
    ```
@@ -22,6 +28,7 @@ This folder contains three opencode plugins. They require the `@opencode-ai/plug
    opencode debug plugins
    ```
    You should see `attribution`, `env-protection`, and `notifications` listed.
+   Cover art is a TUI plugin: restart opencode, then run `/art`.
 
 ## Disabling a plugin
 
@@ -30,9 +37,11 @@ If you don't want a plugin, simply delete the `.js` file from this folder. openc
 - To disable notifications on non-Windows systems: delete `notifications.js`
 - To disable attribution watermark: delete `attribution.js`
 - To disable .env protection: delete `env-protection.js`
+- To disable cover art: delete the `cover-art/` folder (or set `"enabled": false` in `~/.config/opencode/cover-art.json`)
 
 ## Notes
 
 - The `notifications.js` plugin uses PowerShell + `System.Windows.Forms.MessageBox`. On non-Windows systems it will silently fail (the error is caught). If you're on Linux/macOS, delete this file to avoid noise.
+- The `cover-art/` plugin is TUI-only, has an optional MCP server under `cover-art/mcp/`, and never covers prompt or conversation text. See [`cover-art/README.md`](cover-art/README.md).
 - Plugins are loaded automatically from `~/.config/opencode/plugins/`.
 - No plugin will delete or modify your files — they only hook into opencode events for safety/UX.
