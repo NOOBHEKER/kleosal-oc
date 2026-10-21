@@ -66,6 +66,44 @@ smooth default on a normal terminal; lower it if you want even less CPU.
   custom frames, enable/disable, and reset.
 - Changes apply within about half a second; no TUI restart is needed.
 
+## Music art (now playing)
+
+The same post-process layer can show the album art Spotify is playing right now
+as a translucent, blurred background. The square sleeve stays sharp in the
+centre and is colour-extended to the edges, so a wide terminal is filled instead
+of showing a lonely square.
+
+![Music art preview](../../previews/music-art.png)
+
+Music art is driven by the companion zero-dependency daemon
+[`now-playing-cover`](https://github.com/NOOBHEKER/now-playing-cover), which talks
+to the Spotify API with OAuth PKCE and writes a small snapshot plus a raw RGB24
+frame. Nothing is uploaded and there is no cloud relay.
+
+```bash
+/music-art on       # album art while a track plays
+/music-art off      # back to the matrix rain / stock background
+/music-art status   # what the daemon sees right now
+/music-art toggle
+```
+
+While a track is playing the matrix rain is suppressed and the art takes over
+(skipping only the tab bar and footer rows). Pausing or stopping fades the art
+back to the theme over about two seconds, then the rain returns on its own.
+`musicArt` is persisted in the same `cover-art.json`, so the choice survives a
+restart.
+
+The daemon writes:
+
+```
+~/.config/now-playing-cover/now-playing.json   # state + frame path/dimensions
+~/.cache/now-playing-cover/art.rgb             # raw RGB24 pixels
+```
+
+If `ffmpeg` is installed the daemon uses it to blur-extend the sleeve; without
+`ffmpeg` it falls back to a soft average-colour gradient, and with no daemon at
+all the plugin simply leaves the rain alone.
+
 Config file:
 
 ```
@@ -91,7 +129,9 @@ On Windows: `C:\Users\<you>\.config\opencode\cover-art.json`.
   "frames": null,
   "colorMap": null,
   "background": null,
-  "wordmark": null
+  "wordmark": null,
+  "musicArt": false,
+  "musicOpacity": 0.3
 }
 ```
 
@@ -109,6 +149,8 @@ On Windows: `C:\Users\<you>\.config\opencode\cover-art.json`.
 | `frames` | Custom frame sequence (see below) |
 | `colorMap` | Per-character hex colours for custom frames |
 | `background` | Optional hex background behind custom frames |
+| `musicArt` | `true` shows the now-playing sleeve as a background (default `false`) |
+| `musicOpacity` | Sleeve opacity, 0.05–1 (default **0.3** — readable prompt text) |
 
 ### Readability
 
@@ -210,6 +252,10 @@ The Kleosal OC installer prints the exact entry with your path.
   short, slow trails so the background stays calm.
 - `shared.mjs` owns defaults, validation, and atomic reads/writes of the JSON
   config. `mcp/server.mjs` exposes it over MCP.
+- In music mode the sleeve is blended into cell backgrounds with a space glyph,
+  which preserves the prompt text and tints it instead of covering it. Because the
+  rain is suppressed, the plugin calls `renderer.requestRender()` on every music
+  tick; otherwise the first painted frame would stay frozen.
 - `index.ts` is a no-op server-side entry so the plugin directory is valid for
   both discovery paths.
 

@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { Plugin, usePlugin } from "@opencode/plugin/tui"
 import { createEffect, createSignal, For, onCleanup, onMount, untrack } from "solid-js"
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import {
   PRESETS,
   configForPreset,
@@ -9,6 +9,7 @@ import {
   describePresets,
   normalizeConfig,
   readConfig,
+  readNowPlaying,
   writeConfig,
 } from "./shared.mjs"
 import { createEngine, renderFrames, renderMatrix, renderWordmark, type ArtFrame } from "./engine"
@@ -19,6 +20,9 @@ const ART_ID = "cover-art.art"
 const EMPTY: ArtFrame = { rows: [], width: 0, height: 0 }
 
 type PaintGlyph = { x: number; y: number; char: string; color: any }
+type PaintCell = { x: number; y: number; color: string }
+type ArtImage = { key: string; width: number; height: number; data: Uint8Array }
+type Mask = (x: number, y: number) => boolean
 
 // The post-process runs on every UI frame, while the rain itself only changes at
 // the configured fps. Flatten the frame once per rain tick so the draw callback
@@ -40,6 +44,48 @@ function collectGlyphs(frame: ArtFrame, offsetX = 0, offsetY = 0): PaintGlyph[] 
     }
   }
   return glyphs
+}
+
+function byteHex(value: number) {
+  return clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0")
+}
+
+// The daemon already blur-extends the sleeve to a 16:10 raw RGB frame. Here we
+// sample it down to the terminal grid. Two vertical samples are averaged into
+// one full block: a half block leaves the cell's bottom half unpainted in the
+// host renderer, which showed up as dark scanlines.
+function buildMusicCells(
+  image: ArtImage,
+  width: number,
+  height: number,
+  mask: Mask,
+): PaintCell[] {
+  const cells: PaintCell[] = []
+  const fw = image.width
+  const fh = image.height
+  if (fw < 1 || fh < 1 || width < 1 || height < 1) return cells
+  const rowBytes = fw * 3
+  for (let y = 0; y < height; y += 1) {
+    const topRow = Math.min(fh - 1, Math.floor((y * fh) / height))
+    const bottomRow = Math.min(fh - 1, Math.floor(((y * 2 + 1) * fh) / (height * 2)))
+    const topOffset = topRow * rowBytes
+    const bottomOffset = bottomRow * rowBytes
+    for (let x = 0; x < width; x += 1) {
+      if (mask(x, y)) continue
+      const column = Math.min(fw - 1, Math.floor((x * fw) / width)) * 3
+      const data = image.data
+      cells.push({
+        x,
+        y,
+        color: `#${byteHex((((data[topOffset + column] ?? 0) + (data[bottomOffset + column] ?? 0)) / 2))}${byteHex(
+          (((data[topOffset + column + 1] ?? 0) + (data[bottomOffset + column + 1] ?? 0)) / 2),
+        )}${byteHex(
+          (((data[topOffset + column + 2] ?? 0) + (data[bottomOffset + column + 2] ?? 0)) / 2),
+        )}`,
+      })
+    }
+  }
+  return cells
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -201,6 +247,76 @@ function findPromptBox(root: any): any {
   return best
 }
 
+// One mask for both effects. The tab bar, the status line, a halo around the
+// wordmark and the prompt panel stay clear; everything else can take rain or
+// album art without ever putting a glyph on top of UI text.
+function buildMask(
+  root: any,
+  logo: any,
+  promptBox: any,
+  width: number,
+  height: number,
+  logoHalo = true,
+): Mask {
+  const prompt =
+    promptBox && Number(promptBox.width) > 0
+      ? {
+          x: Number(promptBox.x),
+          y: Number(promptBox.y),
+          width: Number(promptBox.width),
+          height: Number(promptBox.height),
+        }
+      : {
+          x: Math.max(2, Math.round((width - Math.min(76, Math.max(20, width - 44))) / 2)),
+          y: Math.round(logo.y) + 5,
+          width: Math.min(76, Math.max(20, width - 44)),
+          height: 9,
+        }
+  const maskLeft = Math.max(0, Math.round(prompt.x) - 2)
+  const maskRight = Math.min(width - 1, Math.round(prompt.x + prompt.width) + 2)
+  const maskTop = Math.max(0, Math.round(prompt.y) - 1)
+  const maskBottom = Math.min(height - 1, Math.round(prompt.y + prompt.height) + 3)
+  return (x: number, y: number) => {
+    if (y < 2 || y >= height - 2) return true
+    if (x >= width - 1) return true
+    if (
+      logoHalo &&
+      x >= logo.x - 2 &&
+      x <= logo.x + logo.width + 2 &&
+      y >= logo.y - 1 &&
+      y <= logo.y + logo.height + 1
+    ) {
+      return true
+    }
+    if (x >= maskLeft && x <= maskRight && y >= maskTop && y <= maskBottom) return true
+    return false
+  }
+}
+
+function loadArtImage(nowPlaying: any): ArtImage | null {
+  if (!nowPlaying?.framePath || !nowPlaying.frameWidth || !nowPlaying.frameHeight) return null
+  let mtime: number
+  try {
+    mtime = statSync(nowPlaying.framePath).mtimeMs
+  } catch {
+    return null
+  }
+  const key = `${nowPlaying.framePath}:${mtime}:${nowPlaying.frameWidth}x${nowPlaying.frameHeight}`
+  try {
+    const raw = readFileSync(nowPlaying.framePath)
+    const expected = nowPlaying.frameWidth * nowPlaying.frameHeight * 3
+    if (raw.length < expected) return null
+    return {
+      key,
+      width: nowPlaying.frameWidth,
+      height: nowPlaying.frameHeight,
+      data: new Uint8Array(raw.buffer, raw.byteOffset, expected),
+    }
+  } catch {
+    return null
+  }
+}
+
 function ArtCanvas(props: any) {
   return (
     <box
@@ -247,6 +363,10 @@ function CoverArt() {
   const [artTop, setArtTop] = createSignal(-1000)
   const [matrixOn, setMatrixOn] = createSignal(false)
   const [artOn, setArtOn] = createSignal(false)
+  const [musicOn, setMusicOn] = createSignal(false)
+  const [musicCells, setMusicCells] = createSignal<PaintCell[]>([])
+  const [musicAlpha, setMusicAlpha] = createSignal(0)
+  const [nowPlaying, setNowPlaying] = createSignal<any>(null)
   const [active, setActive] = createSignal(false)
   const [background, setBackground] = createSignal<string | undefined>(undefined)
 
@@ -259,6 +379,12 @@ function CoverArt() {
   let promptBox: any
   let lastPromptScan = 0
   let lastModalScan = 0
+  let lastNowKey = ""
+  let musicLayoutKey = ""
+  let musicFadeStart = 0
+  let musicStopped = false
+  let musicCacheAlpha = -1
+  let musicColorCache = new Map<string, any>()
 
   const restore = () => {
     if (!logo) return
@@ -299,6 +425,21 @@ function CoverArt() {
   })
 
   onMount(() => {
+    const sample = () => {
+      const next = readNowPlaying()
+      const key = next
+        ? `${next.updatedAt}:${next.trackId}:${Number(next.playing)}:${next.framePath}`
+        : "none"
+      if (key === lastNowKey) return
+      lastNowKey = key
+      setNowPlaying(next)
+    }
+    sample()
+    const timer = setInterval(sample, 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  onMount(() => {
     const renderer = plugin.renderer
     // Post-processing paints into the frame buffer after every renderable has
     // been laid out. It therefore has no hit-test node at all: the rain can
@@ -334,7 +475,7 @@ function CoverArt() {
         }
       }
 
-      if (configValue.effect === "matrix" && matrixOn()) {
+      if (configValue.effect === "matrix" && matrixOn() && !musicOn()) {
         const alpha = clamp(Number(configValue.rainOpacity) || 0, 0, 1)
         if (alpha > 0) {
           if (rainAlpha !== alpha) {
@@ -342,6 +483,30 @@ function CoverArt() {
             rainColors = new Map()
           }
           draw(matrixGlyphs(), matrixX(), matrixY(), alpha, rainColors)
+        }
+      }
+
+      // Album art from the now-playing daemon. Half blocks give two sampled
+      // pixels per cell; both halves are alpha-blended so the theme background
+      // still shows through and the effect stays translucent. Because this is
+      // painted in the post-process pass it has no hit-test node either.
+      const cells = musicCells()
+      const alpha = musicAlpha()
+      if (cells.length && alpha > 0) {
+        if (musicCacheAlpha !== alpha) {
+          musicCacheAlpha = alpha
+          musicColorCache = new Map()
+        }
+        for (const cell of cells) {
+          let bg = musicColorCache.get(cell.color)
+          if (!bg) {
+            bg = packColor(cell.color, alpha)
+            musicColorCache.set(cell.color, bg)
+          }
+          // A space overlay makes OpenTUI blend the art into the cell
+          // background and tint the existing character instead of replacing
+          // it, so prompt text, tabs and dialogs keep their glyphs.
+          buffer.setCellWithAlphaBlending(cell.x, cell.y, " ", transparent, bg)
         }
       }
 
@@ -373,6 +538,9 @@ function CoverArt() {
       setMatrixOn(false)
       setArtGlyphs([])
       setArtOn(false)
+      setMusicOn(false)
+      setMusicCells([])
+      setMusicAlpha(0)
       return
     }
     const rate = Math.max(33, Math.round(1000 / Math.max(1, configValue.fps)))
@@ -385,6 +553,8 @@ function CoverArt() {
     restore()
     setMatrixOn(false)
     setArtOn(false)
+    setMusicOn(false)
+    setMusicCells([])
   })
 
   function tick() {
@@ -398,6 +568,9 @@ function CoverArt() {
         setMatrixOn(false)
         setArtGlyphs([])
         setArtOn(false)
+        setMusicOn(false)
+        setMusicCells([])
+        setMusicAlpha(0)
       }
     }
   }
@@ -419,6 +592,9 @@ function CoverArt() {
       setMatrixOn(false)
       setArtGlyphs([])
       setArtOn(false)
+      setMusicOn(false)
+      setMusicCells([])
+      setMusicAlpha(0)
       return
     }
     if (!promptBox || now - lastPromptScan > 1000) {
@@ -433,7 +609,75 @@ function CoverArt() {
     const theme = plugin.theme
     const isFrames = configValue.effect === "frames"
 
-    if (isFrames) {
+    // Music artwork takes priority over every preset. The sleeve used to be
+    // loaded once per track and the resulting cells are cached per terminal
+    // size, so the 12 fps tick only re-blends the same buffer list.
+    const rootWidth = Math.max(1, Math.floor(Number(root.width)))
+    const rootHeight = Math.max(1, Math.floor(Number(root.height)))
+    const np = nowPlaying()
+    const image = loadArtImage(np)
+    const playing = np?.playing === true
+    const wantsMusic = configValue.musicArt && !!image
+    let musicVisible = false
+    if (wantsMusic) {
+      // A pause fades the sleeve back to the theme over two seconds. The rain
+      // stays suppressed during the fade, then returns on its own. `musicStopped`
+      // keeps the completed fade completed instead of restarting it every tick.
+      if (playing) {
+        musicFadeStart = 0
+        musicStopped = false
+      } else if (musicFadeStart === 0 && !musicStopped) {
+        musicFadeStart = now
+      }
+      const base = clamp(Number(configValue.musicOpacity) || 0, 0, 1)
+      const alpha = playing
+        ? base
+        : musicStopped
+          ? 0
+          : base * Math.max(0, 1 - (now - musicFadeStart) / 2000)
+      if (alpha > 0.01) {
+        const layout = `${image.key}:${rootWidth}x${rootHeight}`
+        if (layout !== musicLayoutKey) {
+          musicLayoutKey = layout
+          // Only the tab bar and status line stay clean. Everything else is
+          // tinted through the background, so no prompt mask is needed.
+          const mask: Mask = (_x, y) => y < 2 || y >= rootHeight - 2
+          setMusicCells(buildMusicCells(image, rootWidth, rootHeight, mask))
+        }
+        setMusicAlpha(alpha)
+        setMusicOn(true)
+        musicVisible = true
+      } else if (!playing) {
+        musicStopped = true
+      }
+    }
+    if (!musicVisible) {
+      if (musicOn() || musicCells().length) {
+        setMusicOn(false)
+        setMusicCells([])
+        setMusicAlpha(0)
+        try {
+          plugin.renderer?.requestRender?.()
+        } catch {}
+      }
+      musicLayoutKey = ""
+      if (!wantsMusic) {
+        musicFadeStart = 0
+        musicStopped = false
+      }
+    }
+    if (musicVisible) {
+      setMatrixGlyphs([])
+      setMatrixOn(false)
+      // The rain normally drives repaints by changing glyphs. While it is
+      // suppressed nothing in the renderable tree changes, so the post-process
+      // would otherwise keep painting the first sleeve forever.
+      try {
+        plugin.renderer?.requestRender?.()
+      } catch {}
+    }
+
+    if (isFrames && !musicVisible) {
       const art = renderFrames(configValue, theme, now)
       // Never cover the UI with art wider than the terminal. Leave the stock
       // logo alone in that case and wait for a resize or a new config.
@@ -507,45 +751,11 @@ function CoverArt() {
 
     setMatrixGlyphs([])
     let matrix: ArtFrame | undefined
-    if (configValue.effect === "matrix") {
+    if (configValue.effect === "matrix" && !musicVisible) {
       if (configValue.fullscreen) {
         const width = Math.max(8, Math.floor(Number(root.width)))
         const height = Math.max(6, Math.floor(Number(root.height)))
-        const prompt =
-          promptBox && Number(promptBox.width) > 0
-            ? {
-                x: Number(promptBox.x),
-                y: Number(promptBox.y),
-                width: Number(promptBox.width),
-                height: Number(promptBox.height),
-              }
-            : {
-                x: Math.max(2, Math.round((width - Math.min(76, Math.max(20, width - 44))) / 2)),
-                y: Math.round(logo.y) + 5,
-                width: Math.min(76, Math.max(20, width - 44)),
-                height: 9,
-              }
-        const maskLeft = Math.max(0, Math.round(prompt.x) - 2)
-        const maskRight = Math.min(width - 1, Math.round(prompt.x + prompt.width) + 2)
-        const maskTop = Math.max(0, Math.round(prompt.y) - 1)
-        const maskBottom = Math.min(height - 1, Math.round(prompt.y + prompt.height) + 3)
-        const mask = (x: number, y: number) => {
-          // Keep the top tab bar and bottom status line completely clear.
-          if (y < 2 || y >= height - 2) return true
-          if (x >= width - 1) return true
-          // A clean halo around the real wordmark.
-          if (
-            x >= logo.x - 2 &&
-            x <= logo.x + logo.width + 2 &&
-            y >= logo.y - 1 &&
-            y <= logo.y + logo.height + 1
-          ) {
-            return true
-          }
-          // The prompt, model line, and help line.
-          if (x >= maskLeft && x <= maskRight && y >= maskTop && y <= maskBottom) return true
-          return false
-        }
+        const mask = buildMask(root, logo, promptBox, width, height)
         matrix = renderMatrix(matrixEngine, configValue, theme, now, width, height, {
           full: true,
           mask,
@@ -595,6 +805,54 @@ function CoverArt() {
   )
 }
 
+async function musicArtCommand(plugin: any, input?: string) {
+  const argument = String(input ?? "").trim().toLowerCase()
+  const current = readConfig()
+  const toast = (message: string, variant: "success" | "warning" | "error" = "success") =>
+    plugin.ui.toast.show({ title: "Music art", message, variant })
+
+  if (argument === "on" || argument === "off") {
+    const musicArt = argument === "on"
+    writeConfig({ ...current, musicArt })
+    const rain = current.effect === "matrix" ? " · matrix rain paused while a track plays" : ""
+    toast(musicArt ? `On — album art background${rain}` : `Off — ${current.effect === "matrix" ? "matrix rain active" : "stock background"}`)
+    return
+  }
+
+  if (argument === "toggle") {
+    const musicArt = !current.musicArt
+    writeConfig({ ...current, musicArt })
+    toast(musicArt ? "On — album art background" : "Off — stock background")
+    return
+  }
+
+  if (argument === "status" || argument === "") {
+    const nowPlaying = readNowPlaying()
+    if (!current.musicArt) {
+      toast(`Off — ${current.effect === "matrix" ? "matrix rain active" : "stock background"}`, "warning")
+      return
+    }
+    if (!nowPlaying) {
+      toast("On — waiting for the now-playing daemon", "warning")
+      return
+    }
+    if (nowPlaying.stale) {
+      toast("On — daemon is stale (no update for 2 min) · rain active", "warning")
+      return
+    }
+    if (nowPlaying.playing) {
+      const track = [nowPlaying.title, nowPlaying.artist].filter(Boolean).join(" — ")
+      toast(`On — ${track || "playing"} (${nowPlaying.source}) · rain paused`)
+      return
+    }
+    const track = [nowPlaying.title, nowPlaying.artist].filter(Boolean).join(" — ")
+    toast(`On — paused${track ? `: ${track}` : ""} · rain active`, "warning")
+    return
+  }
+
+  toast(`Unknown option "${argument}". Use /music-art on, off, or status.`, "error")
+}
+
 async function openMenu(plugin: any) {
   const current = readConfig()
   const options: any[] = [
@@ -638,6 +896,23 @@ async function openMenu(plugin: any) {
       description: "Compact rain panel on the left",
       category: "Layout",
     },
+    {
+      title: current.musicArt ? "✓ Album art background" : "Album art background",
+      value: "music:toggle",
+      description: "Spotify sleeve from the now-playing daemon · pauses the rain",
+      category: "Music art",
+    },
+    ...[
+      ["Ghost", 0.18],
+      ["Soft", 0.28],
+      ["Clear", 0.4],
+      ["Bold", 0.55],
+    ].map(([label, value]) => ({
+      title: `${label} (${value})`,
+      value: `music:${value}`,
+      description: "How strongly the album art shows through",
+      category: "Music art faintness",
+    })),
     {
       title: current.wordmark === "OMENCODE" ? "✓ Wordmark: OMENCODE" : "Wordmark: OMENCODE",
       value: "wordmark:OMENCODE",
@@ -720,6 +995,27 @@ async function openMenu(plugin: any) {
       return
     }
 
+    if (picked === "music:toggle") {
+      writeConfig({ ...current, musicArt: !current.musicArt })
+      plugin.ui.toast.show({
+        title: "Music art",
+        message: current.musicArt ? "Off · stock background" : "On · matrix rain paused while playing",
+        variant: "success",
+      })
+      return
+    }
+
+    if (picked.startsWith("music:")) {
+      const value = Number(picked.slice("music:".length))
+      writeConfig({ ...current, musicOpacity: value })
+      plugin.ui.toast.show({
+        title: "Music art",
+        message: `Artwork opacity ${value}`,
+        variant: "success",
+      })
+      return
+    }
+
     if (picked.startsWith("wordmark:")) {
       const value = picked.slice("wordmark:".length)
       writeConfig({ ...current, wordmark: value === "stock" ? null : value })
@@ -796,6 +1092,15 @@ export default Plugin.define({
           palette: true,
           slash: { name: "art" },
           run: () => openMenu(context),
+        },
+        {
+          id: "coverart.music",
+          title: "Music art (now playing)",
+          description: "Album art background · on | off | status",
+          group: "Cover art",
+          palette: true,
+          slash: { name: "music-art", arguments: true },
+          run: (input?: string) => musicArtCommand(context, input),
         },
       ],
     }))

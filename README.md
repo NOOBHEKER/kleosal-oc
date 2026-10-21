@@ -32,7 +32,7 @@ This installs the `kleosal-oc` pack. The Cowork kit has its own Windows installe
 
 <sub>Still preview: [cover-art-full.png](kleosal-oc/previews/cover-art-full.png)</sub>
 
-A full-screen, theme-adaptive digital rain for the home screen. The real `opencode` wordmark stays readable; the rain is masked around the wordmark, prompt, tab bar, footer, and scrollbar, so nothing ever sits behind text. It is painted into the render buffer instead of as an overlay, so it cannot intercept tab clicks, wheel scrolling, or dialog clicks. `/art` switches presets, wordmark/rain faintness, full-screen vs. left-panel layout, and custom frames. Zero npm dependencies.
+A full-screen, theme-adaptive digital rain for the home screen. The real `opencode` wordmark stays readable; the rain is masked around the wordmark, prompt, tab bar, footer, and scrollbar, so nothing ever sits behind text. It is painted into the render buffer instead of as an overlay, so it cannot intercept tab clicks, wheel scrolling, or dialog clicks. `/art` switches presets, wordmark/rain faintness, full-screen vs. left-panel layout, and custom frames. `/music-art` swaps the rain for the album art Spotify is playing, blur-extended to fill the screen. Zero npm dependencies.
 
 [Cover-art plugin docs →](kleosal-oc/plugins/cover-art/README.md)
 

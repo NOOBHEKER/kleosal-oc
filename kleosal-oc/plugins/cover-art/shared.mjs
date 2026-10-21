@@ -10,6 +10,13 @@ const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".conf
 export const CONFIG_PATH =
   process.env.COVERART_CONFIG || path.join(configHome, "opencode", "cover-art.json")
 
+// Written by the optional now-playing-cover daemon. Kept outside the opencode
+// config directory so the daemon can be installed (and uninstalled) on its own
+// without ever touching the user's agent configuration.
+export const NOW_PLAYING_PATH =
+  process.env.NOW_PLAYING_JSON ||
+  path.join(configHome, "now-playing-cover", "now-playing.json")
+
 const BLOCKS = "█▀▄░▒▓▁▂▃▅▆▇■□▪▫◆◇●○◎"
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i
 
@@ -70,6 +77,10 @@ export const DEFAULT_CONFIG = {
   colorMap: null,
   background: null,
   wordmark: null,
+  // Album art from the now-playing-cover daemon. When this is on and a track
+  // is playing, the matrix rain is suppressed so the two effects never fight.
+  musicArt: false,
+  musicOpacity: 0.3,
 }
 
 function clamp(value, min, max, fallback) {
@@ -188,6 +199,8 @@ export function normalizeConfig(input) {
       typeof source.wordmark === "string" && source.wordmark.trim()
         ? source.wordmark.trim().replace(/[^\w .-]/g, "").slice(0, 16) || null
         : null,
+    musicArt: source.musicArt === true,
+    musicOpacity: clamp(source.musicOpacity, 0.05, 0.9, fallback.musicOpacity),
   }
 }
 
@@ -210,6 +223,55 @@ export function writeConfig(input) {
   writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, "utf8")
   renameSync(temporary, CONFIG_PATH)
   return config
+}
+
+// Read the daemon's last snapshot. A daemon that died leaves its last playing
+// state on disk forever, so anything older than two minutes is treated as "no
+// music" and the normal cover art comes back. Never throws.
+export function readNowPlaying(now = Date.now()) {
+  let raw
+  try {
+    raw = readFileSync(NOW_PLAYING_PATH, "utf8").replace(/^\uFEFF/, "")
+  } catch {
+    return null
+  }
+  let data
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null
+
+  const updatedAt = Number(data.updatedAt) || 0
+  const stale = updatedAt <= 0 || now - updatedAt > 120_000
+  const frameWidth = Math.floor(Number(data.frameWidth) || 0)
+  const frameHeight = Math.floor(Number(data.frameHeight) || 0)
+  const text = (value) => (typeof value === "string" ? value.trim() : "")
+
+  return {
+    source: text(data.source) || "spotify",
+    playing: data.playing === true && !stale,
+    paused: data.paused === true,
+    stale,
+    trackId: text(data.trackId),
+    title: text(data.title),
+    artist: text(data.artist),
+    album: text(data.album),
+    artUrl: text(data.artUrl),
+    artPath: text(data.artPath),
+    framePath: text(data.framePath),
+    frameWidth: frameWidth > 0 ? frameWidth : 0,
+    frameHeight: frameHeight > 0 ? frameHeight : 0,
+    dominantColor:
+      typeof data.dominantColor === "string" && HEX.test(data.dominantColor)
+        ? data.dominantColor.toLowerCase()
+        : null,
+    progressMs: Math.max(0, Number(data.progressMs) || 0),
+    durationMs: Math.max(0, Number(data.durationMs) || 0),
+    updatedAt,
+    error: text(data.error) || null,
+  }
 }
 
 export function configKey(config) {
