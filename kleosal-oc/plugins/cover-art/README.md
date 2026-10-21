@@ -77,8 +77,14 @@ of showing a lonely square.
 
 Music art is driven by the companion zero-dependency daemon
 [`now-playing-cover`](https://github.com/NOOBHEKER/now-playing-cover), which talks
-to the Spotify API with OAuth PKCE and writes a small snapshot plus a raw RGB24
+to the Spotify API with OAuth PKCE — or, on Windows, reads the system media
+session (SMTC) without a login — and writes a small snapshot plus a raw RGB24
 frame. Nothing is uploaded and there is no cloud relay.
+
+On Windows the daemon's default `auto` source uses the desktop Spotify app's
+system media session first, so **Spotify Free works without OAuth**. The Web API
+path requires Premium on the Spotify account that owns the developer app. On
+macOS and Linux only the Web API source is available.
 
 ```bash
 /music-art on       # album art while a track plays
@@ -97,7 +103,7 @@ The daemon writes:
 
 ```
 ~/.config/now-playing-cover/now-playing.json   # state + frame path/dimensions
-~/.cache/now-playing-cover/art.rgb             # raw RGB24 pixels
+~/.cache/now-playing-cover/<track>.rgb        # raw RGB24 pixels
 ```
 
 If `ffmpeg` is installed the daemon uses it to blur-extend the sleeve; without

@@ -809,11 +809,14 @@ async function musicArtCommand(plugin: any, input?: string) {
   const argument = String(input ?? "").trim().toLowerCase()
   const current = readConfig()
   const toast = (message: string, variant: "success" | "warning" | "error" = "success") =>
-    plugin.ui.toast.show({ title: "Music art", message, variant })
+    plugin.ui.toast.show({ title: "Music art", message, variant, duration: 4000 })
 
   if (argument === "on" || argument === "off") {
     const musicArt = argument === "on"
-    writeConfig({ ...current, musicArt })
+    // Turning music art on should also re-enable the cover-art effect: the
+    // master switch may have been turned off with `/art`, and a command that
+    // says "on" must actually paint something.
+    writeConfig({ ...current, musicArt, ...(musicArt ? { enabled: true } : {}) })
     const rain = current.effect === "matrix" ? " · matrix rain paused while a track plays" : ""
     toast(musicArt ? `On — album art background${rain}` : `Off — ${current.effect === "matrix" ? "matrix rain active" : "stock background"}`)
     return
@@ -821,7 +824,7 @@ async function musicArtCommand(plugin: any, input?: string) {
 
   if (argument === "toggle") {
     const musicArt = !current.musicArt
-    writeConfig({ ...current, musicArt })
+    writeConfig({ ...current, musicArt, ...(musicArt ? { enabled: true } : {}) })
     toast(musicArt ? "On — album art background" : "Off — stock background")
     return
   }
@@ -996,10 +999,11 @@ async function openMenu(plugin: any) {
     }
 
     if (picked === "music:toggle") {
-      writeConfig({ ...current, musicArt: !current.musicArt })
+      const musicArt = !current.musicArt
+      writeConfig({ ...current, musicArt, ...(musicArt ? { enabled: true } : {}) })
       plugin.ui.toast.show({
         title: "Music art",
-        message: current.musicArt ? "Off · stock background" : "On · matrix rain paused while playing",
+        message: musicArt ? "On · matrix rain paused while playing" : "Off · stock background",
         variant: "success",
       })
       return
