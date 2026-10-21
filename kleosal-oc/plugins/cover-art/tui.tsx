@@ -835,6 +835,10 @@ async function musicArtCommand(plugin: any, input?: string) {
       toast(`Off — ${current.effect === "matrix" ? "matrix rain active" : "stock background"}`, "warning")
       return
     }
+    if (!current.enabled) {
+      toast("On — but cover art is disabled. Run /music-art on to enable it.", "warning")
+      return
+    }
     if (!nowPlaying) {
       toast("On — waiting for the now-playing daemon", "warning")
       return
