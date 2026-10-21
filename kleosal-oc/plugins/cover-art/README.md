@@ -69,9 +69,10 @@ smooth default on a normal terminal; lower it if you want even less CPU.
 ## Music art (now playing)
 
 The same post-process layer can show the album art Spotify is playing right now
-as a translucent, blurred background. The square sleeve stays sharp in the
-centre and is colour-extended to the edges, so a wide terminal is filled instead
-of showing a lonely square.
+as a smooth, blurred ambient wash behind the UI, with a compact now-playing
+widget in the empty top-right corner on the home screen. The wash is sampled
+from the daemon's colour-extended frame, so it fills a wide terminal without
+ever putting a hard rectangle over the prompt or a response.
 
 ![Music art preview](../../previews/music-art.png)
 
@@ -94,10 +95,13 @@ macOS and Linux only the Web API source is available.
 ```
 
 While a track is playing the matrix rain is suppressed and the art takes over
-(skipping only the tab bar and footer rows). Pausing or stopping fades the art
-back to the theme over about two seconds, then the rain returns on its own.
-`musicArt` is persisted in the same `cover-art.json`, so the choice survives a
-restart.
+(skipping the tab bar, footer and the prompt panel). On the home screen a small
+now-playing widget shows the sleeve thumbnail, track, artist, album and a
+progress line in the empty top-right corner. When a session opens the widget
+eases out, while the ambient wash stays behind the session, so the effect never
+just disappears. Pausing or stopping fades the art back to the theme over about
+two seconds, then the rain returns on its own. `musicArt` is persisted in the
+same `cover-art.json`, so the choice survives a restart.
 
 The daemon writes:
 
@@ -155,8 +159,8 @@ On Windows: `C:\Users\<you>\.config\opencode\cover-art.json`.
 | `frames` | Custom frame sequence (see below) |
 | `colorMap` | Per-character hex colours for custom frames |
 | `background` | Optional hex background behind custom frames |
-| `musicArt` | `true` shows the now-playing sleeve as a background (default `false`) |
-| `musicOpacity` | Sleeve opacity, 0.05–1 (default **0.3** — readable prompt text) |
+| `musicArt` | `true` shows the now-playing ambient wash and home widget (default `false`) |
+| `musicOpacity` | Ambient wash opacity, 0.05–1 (default **0.3** — readable prompt text) |
 
 ### Readability
 
@@ -258,11 +262,16 @@ The Kleosal OC installer prints the exact entry with your path.
   short, slow trails so the background stays calm.
 - `shared.mjs` owns defaults, validation, and atomic reads/writes of the JSON
   config. `mcp/server.mjs` exposes it over MCP.
-- In music mode the sleeve is blended into cell backgrounds with a space glyph,
-  which preserves the prompt text and tints it instead of covering it. Because the
-  rain is suppressed, the plugin calls `renderer.requestRender()` on every music
-  tick; otherwise the first painted frame would stay frozen.
+- In music mode the daemon's blurred frame is sampled bilinearly into space-cell
+  backgrounds, which preserves existing glyphs and tints them instead of covering
+  them. The home widget is also cell backgrounds, plus a few title/artist glyphs
+  confined to the empty top-right corner. When a session opens the widget eases
+  out and its glyphs are explicitly erased, while the ambient wash continues on
+  every route. Because the rain is suppressed, the plugin calls
+  `renderer.requestRender()` on every music tick; otherwise the first painted
+  frame would stay frozen.
 - `index.ts` is a no-op server-side entry so the plugin directory is valid for
   both discovery paths.
 
-Only the home screen is affected; session and conversation views are untouched.
+Rain, frames and the custom wordmark remain home-only. The music ambient is the
+one layer that intentionally stays behind session views.
