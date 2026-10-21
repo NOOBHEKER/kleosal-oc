@@ -975,7 +975,14 @@ function CoverArt() {
           }
           putText(layout.textX, layout.titleY, cardMeta.title, "#f4f7fb")
           putText(layout.textX, layout.artistY, cardMeta.artist, "#aeb8c8")
-          putText(layout.textX, layout.albumY, cardMeta.album, "#7f8b9e")
+          const album = String(cardMeta.album).replace(/[\r\n\t]+/g, " ").trim()
+          const albumFits = Array.from(album).length <= layout.maxChars
+          putText(
+            layout.textX,
+            layout.albumY,
+            albumFits ? album || "Now playing" : "Now playing",
+            "#7f8b9e",
+          )
 
           const filled = Math.round(layout.barW * clamp(cardMeta.progress, 0, 1))
           for (let i = 0; i < layout.barW; i += 1) {
