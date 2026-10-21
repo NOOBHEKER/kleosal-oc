@@ -951,8 +951,14 @@ function CoverArt() {
         const layout = cardLayout(width, height)
         if (layout) {
           const textAlpha = clamp(cardAlpha, 0, 1)
+          const truncate = (text: string) => {
+            const chars = Array.from(String(text).replace(/[\r\n\t]+/g, " ").trim())
+            if (chars.length <= layout.maxChars) return chars
+            if (layout.maxChars <= 1) return ["…"]
+            return [...chars.slice(0, layout.maxChars - 1), "…"]
+          }
           const putText = (x: number, y: number, text: string, color: string) => {
-            const chars = Array.from(text).slice(0, layout.maxChars)
+            const chars = truncate(text)
             for (let i = 0; i < chars.length; i += 1) {
               const cx = x + i
               if (cx >= width || cx > layout.x0 + layout.w - 2 || y < 0 || y >= height) break
