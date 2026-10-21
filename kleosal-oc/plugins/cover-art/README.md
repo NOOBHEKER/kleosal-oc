@@ -99,9 +99,12 @@ While a track is playing the matrix rain is suppressed and the art takes over
 now-playing widget shows the sleeve thumbnail, track, artist, album and a
 progress line in the empty top-right corner. When a session opens the widget
 eases out, while the ambient wash stays behind the session, so the effect never
-just disappears. Pausing or stopping fades the art back to the theme over about
-two seconds, then the rain returns on its own. `musicArt` is persisted in the
-same `cover-art.json`, so the choice survives a restart.
+just disappears. Pausing keeps a dimmed version of the art and the widget shows
+`Paused`; stopping fades it back to the theme over about two seconds, then the
+rain returns on its own. Spotify Free ads share the same media session, so the
+daemon holds the previous track's artwork during an ad instead of dropping to a
+blank gradient. `musicArt` is persisted in the same `cover-art.json`, so the
+choice survives a restart.
 
 The daemon writes:
 

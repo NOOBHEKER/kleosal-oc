@@ -252,7 +252,7 @@ export function readNowPlaying(now = Date.now()) {
   return {
     source: text(data.source) || "spotify",
     playing: data.playing === true && !stale,
-    paused: data.paused === true,
+    paused: data.paused === true && !stale,
     stale,
     trackId: text(data.trackId),
     title: text(data.title),

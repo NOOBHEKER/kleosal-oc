@@ -677,8 +677,9 @@ function CoverArt() {
   let lastModalScan = 0
   let lastNowKey = ""
   let musicLayoutKey = ""
-  let musicFadeStart = 0
-  let musicStopped = false
+  // 0..1, eased every tick: full while playing, dimmed while paused, zero when
+  // idle. Keeping a dim level means a pause no longer makes the art vanish.
+  let musicLevel = 0
   let musicCacheAlpha = -1
   let musicColorCache = new Map<string, any>()
   let cardCacheAlpha = -1
@@ -694,7 +695,7 @@ function CoverArt() {
   let cardFade = 0
   // Plain (non-reactive) track text for the widget; draw() refreshes it every
   // tick and paint() reads the current values.
-  let cardMeta = { title: "", artist: "", album: "", progress: 0 }
+  let cardMeta = { title: "", artist: "", album: "", progress: 0, paused: false }
   // Glyph cells the widget wrote last frame. The app does not repaint the empty
   // top-right corner, so these have to be erased explicitly when the widget
   // fades out or the track stops, otherwise the text would ghost on screen.
@@ -720,6 +721,7 @@ function CoverArt() {
     tiltX = 0
     tiltY = 0
     cardFade = 0
+    musicLevel = 0
   }
 
   const place = (el: any, current: { left: number; top: number }, x: number, y: number) => {
@@ -977,12 +979,8 @@ function CoverArt() {
           putText(layout.textX, layout.artistY, cardMeta.artist, "#aeb8c8")
           const album = String(cardMeta.album).replace(/[\r\n\t]+/g, " ").trim()
           const albumFits = Array.from(album).length <= layout.maxChars
-          putText(
-            layout.textX,
-            layout.albumY,
-            albumFits ? album || "Now playing" : "Now playing",
-            "#7f8b9e",
-          )
+          const statusLine = cardMeta.paused ? "Paused" : albumFits ? album || "Now playing" : "Now playing"
+          putText(layout.textX, layout.albumY, statusLine, "#7f8b9e")
 
           const filled = Math.round(layout.barW * clamp(cardMeta.progress, 0, 1))
           for (let i = 0; i < layout.barW; i += 1) {
@@ -1117,25 +1115,21 @@ function CoverArt() {
       artist: String(np?.artist ?? ""),
       album: String(np?.album ?? ""),
       progress: duration > 0 ? clamp((Number(np?.progressMs) || 0) / duration, 0, 1) : 0,
+      paused: np?.paused === true && !np?.stale,
     }
     const wantsMusic = configValue.musicArt && !!image
     let musicVisible = false
     if (wantsMusic) {
-      // A pause fades the sleeve back to the theme over two seconds. The rain
-      // stays suppressed during the fade, then returns on its own. `musicStopped`
-      // keeps the completed fade completed instead of restarting it every tick.
-      if (playing) {
-        musicFadeStart = 0
-        musicStopped = false
-      } else if (musicFadeStart === 0 && !musicStopped) {
-        musicFadeStart = now
-      }
+      // Playing keeps the full wash. A pause holds a dim version of the sleeve
+      // instead of dropping straight back to the theme, and only an idle daemon
+      // fades the art all the way out. The level is eased so state changes are
+      // smooth rather than a visible snap.
+      const paused = np?.paused === true && !np?.stale && !!np?.title
+      const targetLevel = playing ? 1 : paused ? 0.42 : 0
+      musicLevel += (targetLevel - musicLevel) * 0.14
+      if (musicLevel < 0.005) musicLevel = 0
       const base = clamp(Number(configValue.musicOpacity) || 0, 0, 1)
-      const alpha = playing
-        ? base
-        : musicStopped
-          ? 0
-          : base * Math.max(0, 1 - (now - musicFadeStart) / 2000)
+      const alpha = base * musicLevel
       if (alpha > 0.01) {
         // Same fallback rectangle as buildMask(): once the user types, the
         // \"Ask anything\" placeholder is gone and findPromptBox() returns
@@ -1218,8 +1212,6 @@ function CoverArt() {
         setMusicAlpha(alpha)
         setMusicOn(true)
         musicVisible = true
-      } else if (!playing) {
-        musicStopped = true
       }
     }
     if (!musicVisible) {
@@ -1230,10 +1222,7 @@ function CoverArt() {
         } catch {}
       }
       musicLayoutKey = ""
-      if (!wantsMusic) {
-        musicFadeStart = 0
-        musicStopped = false
-      }
+      if (!wantsMusic) musicLevel = 0
     }
     if (musicVisible) {
       setMatrixGlyphs([])
