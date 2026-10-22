@@ -103,29 +103,22 @@ function buildMusicCells(
   const fw = image.width
   const fh = image.height
   if (fw < 1 || fh < 1 || width < 1 || height < 1) return cells
-  const rowBytes = fw * 3
   const data = image.data
 
-  // The centre of the daemon frame is the sharp sleeve; the ambient wants it
-  // as soft as the edges, so box-blur that region before sampling it.
-  const fg = Math.max(16, Math.round(fh * 0.72))
-  const sleeveLeft = Math.max(0, Math.floor((fw - fg) / 2))
-  const sleeveTop = Math.max(0, Math.floor((fh - fg) / 2))
-  const sleeveRight = Math.min(fw, sleeveLeft + fg)
-  const sleeveBottom = Math.min(fh, sleeveTop + fg)
-  const cellLeft = (sleeveLeft / fw) * width
-  const cellRight = (sleeveRight / fw) * width
-  const cellTop = (sleeveTop / fh) * height
-  const cellBottom = (sleeveBottom / fh) * height
-  const blur = Math.max(2, Math.round(fg / 10))
-  // A gentle saturation lift keeps the wash from turning into grey mud on a
-  // dark theme without making it loud. The paint alpha still keeps it quiet.
+  // Keep the frame's sharp centre. That region is the actual sleeve, and
+  // sampling it directly is what makes the cover recognisable instead of a
+  // vague tint. The daemon has already blur-extended the outer area, so the
+  // art still fades smoothly into the terminal at the edges.
+  //
+  // A gentle saturation lift keeps the cover from turning into grey mud on a
+  // dark theme. Readability is handled separately: paint() never draws art on
+  // a cell that already holds a glyph.
   const enrich = (red: number, green: number, blue: number) => {
     const gray = (red + green + blue) / 3
     return [
-      clamp(gray + (red - gray) * 1.12, 0, 255),
-      clamp(gray + (green - gray) * 1.12, 0, 255),
-      clamp(gray + (blue - gray) * 1.12, 0, 255),
+      clamp(gray + (red - gray) * 1.16, 0, 255),
+      clamp(gray + (green - gray) * 1.16, 0, 255),
+      clamp(gray + (blue - gray) * 1.16, 0, 255),
     ]
   }
 
@@ -134,39 +127,7 @@ function buildMusicCells(
       if (mask(x, y)) continue
       const nx = ((x + 0.5) / width) * 2 - 1
       const ny = ((y + 0.5) / height) * 2 - 1
-      const vignette = 0.72 + 0.28 * (1 - Math.min(1, (nx * nx + ny * ny) / 2))
-      const inSleeve = x >= cellLeft && x < cellRight && y >= cellTop && y < cellBottom
-      if (inSleeve) {
-        const sx = clamp(Math.floor(((x + 0.5) / width) * fw), sleeveLeft, sleeveRight - 1)
-        const sy = clamp(Math.floor(((y + 0.5) / height) * fh), sleeveTop, sleeveBottom - 1)
-        let red = 0
-        let green = 0
-        let blue = 0
-        let count = 0
-        for (let by = -blur; by <= blur; by += 1) {
-          const yy = clamp(sy + by, sleeveTop, sleeveBottom - 1)
-          const row = yy * rowBytes
-          for (let bx = -blur; bx <= blur; bx += 1) {
-            const xx = clamp(sx + bx, sleeveLeft, sleeveRight - 1)
-            const offset = row + xx * 3
-            red += data[offset] ?? 0
-            green += data[offset + 1] ?? 0
-            blue += data[offset + 2] ?? 0
-            count += 1
-          }
-        }
-        const [er, eg, eb] = enrich(
-          (red / count) * vignette,
-          (green / count) * vignette,
-          (blue / count) * vignette,
-        )
-        cells.push({
-          x,
-          y,
-          color: `#${byteHex(er)}${byteHex(eg)}${byteHex(eb)}`,
-        })
-        continue
-      }
+      const vignette = 0.82 + 0.18 * (1 - Math.min(1, (nx * nx + ny * ny) / 2))
       const [red, green, blue] = bilinear(
         data,
         fw,
@@ -915,7 +876,7 @@ function CoverArt() {
       // glyphs are never replaced. It stays on every route, including sessions.
       const cells = musicCells()
       const alpha = musicAlpha()
-      const ambientAlpha = clamp(alpha, 0, 0.34)
+      const ambientAlpha = clamp(alpha, 0, 0.6)
       const shadow = musicShadow()
       const sleeve = musicCard()
       const layout = cardLayout(width, height)
@@ -934,19 +895,23 @@ function CoverArt() {
           musicCacheAlpha = ambientAlpha
           musicColorCache = new Map()
         }
-        const textAlpha = ambientAlpha * 0.5
+        const scrim = packColor("#000000", 0.5)
         for (const cell of cells) {
-          const overText = hasText(cell.x, cell.y)
-          const key = overText ? `${cell.color}~text` : cell.color
+          // Glyph cells get a dark scrim instead of the cover. The art stays
+          // vivid in open space, while every character keeps a dark, stable
+          // background no matter how bright the album cover is.
+          if (hasText(cell.x, cell.y)) {
+            buffer.setCellWithAlphaBlending(cell.x, cell.y, " ", transparent, scrim)
+            continue
+          }
+          const key = cell.color
           let bg = musicColorCache.get(key)
           if (!bg) {
-            bg = packColor(cell.color, overText ? textAlpha : ambientAlpha)
+            bg = packColor(cell.color, ambientAlpha)
             musicColorCache.set(key, bg)
           }
           // A space overlay makes OpenTUI blend the art into the cell
-          // background and tint the existing character instead of replacing
-          // it, so prompt text, tabs and dialogs keep their glyphs. Over a
-          // glyph the wash is halved so contrast is preserved.
+          // background without replacing anything.
           buffer.setCellWithAlphaBlending(cell.x, cell.y, " ", transparent, bg)
         }
       }
@@ -960,8 +925,8 @@ function CoverArt() {
           shadowColorCache = new Map()
         }
         for (const cell of shadow) {
-          const overText = hasText(cell.x, cell.y)
-          const shaded = (cell.alpha ?? 0) * (overText ? 0.35 : 1) * cardFade
+          if (hasText(cell.x, cell.y)) continue
+          const shaded = (cell.alpha ?? 0) * cardFade
           if (shaded <= 0.005) continue
           const key = `${cell.color}:${shaded.toFixed(3)}`
           let bg = shadowColorCache.get(key)
@@ -979,11 +944,10 @@ function CoverArt() {
           cardColorCache = new Map()
         }
         for (const cell of sleeve) {
-          // The card sits in empty chrome, so it can be nearly opaque. If a
-          // glyph does end up underneath it, keep that cell readable instead of
-          // stamping over the character.
-          const overText = hasText(cell.x, cell.y)
-          const cellAlpha = overText ? cardAlpha * 0.35 : cardAlpha
+          // The card is drawn only in open chrome. A glyph cell is left
+          // completely alone so the widget can never reduce text contrast.
+          if (hasText(cell.x, cell.y)) continue
+          const cellAlpha = cardAlpha
           if (cellAlpha <= 0.005) continue
           const key = `${cell.avg}:${cellAlpha.toFixed(3)}`
           let bg = cardColorCache.get(key)
