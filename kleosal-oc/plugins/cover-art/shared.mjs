@@ -80,7 +80,7 @@ export const DEFAULT_CONFIG = {
   // Album art from the now-playing-cover daemon. When this is on and a track
   // is playing, the matrix rain is suppressed so the two effects never fight.
   musicArt: false,
-  musicOpacity: 0.5,
+  musicOpacity: 0.45,
 }
 
 function clamp(value, min, max, fallback) {

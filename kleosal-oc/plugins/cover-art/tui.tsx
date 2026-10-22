@@ -522,54 +522,65 @@ function boostChannel(value: number, luma: number) {
   return clamp(Math.round(contrasted + 2), 0, 255)
 }
 
-function loadArtImage(nowPlaying: any): ArtImage | null {
-  if (!nowPlaying?.framePath || !nowPlaying.frameWidth || !nowPlaying.frameHeight) return null
-  let mtime: number
-  try {
-    mtime = statSync(nowPlaying.framePath).mtimeMs
-  } catch {
-    return null
+// Build the ambient cover cells once per layout change. We sample at a reduced
+// grid (every 2nd cell) and upscale, which cuts the paint calls by ~75% while
+// still looking smooth because the daemon frame is already blurred. A subtle
+// vignette keeps the centre bright and the edges (where text lives) darker,
+// so glyphs stay readable without any per-cell scrim blocks.
+function buildMusicCells(
+  image: ArtImage,
+  width: number,
+  height: number,
+  mask: Mask,
+): PaintCell[] {
+  const cells: PaintCell[] = []
+  const fw = image.width
+  const fh = image.height
+  if (fw < 1 || fh < 1 || width < 1 || height < 1) return cells
+  const data = image.data
+
+  // Gentle saturation lift keeps the cover from turning into grey mud.
+  const enrich = (red: number, green: number, blue: number) => {
+    const gray = (red + green + blue) / 3
+    return [
+      clamp(gray + (red - gray) * 1.16, 0, 255),
+      clamp(gray + (green - gray) * 1.16, 0, 255),
+      clamp(gray + (blue - gray) * 1.16, 0, 255),
+    ]
   }
-  const key = `${nowPlaying.framePath}:${mtime}:${nowPlaying.frameWidth}x${nowPlaying.frameHeight}`
-  if (artImageCache?.key === key) return artImageCache.image
-  try {
-    const raw = readFileSync(nowPlaying.framePath)
-    const expected = nowPlaying.frameWidth * nowPlaying.frameHeight * 3
-    if (raw.length < expected) return null
-    const data = new Uint8Array(raw.buffer, raw.byteOffset, expected)
-    const fw = nowPlaying.frameWidth
-    const fh = nowPlaying.frameHeight
-    // Extract and pre-tone the sharp square once per frame instead of doing it
-    // for every cell on every animation tick.
-    const size = Math.max(16, Math.round(fh * 0.72))
-    const left = Math.max(0, Math.floor((fw - size) / 2))
-    const top = Math.max(0, Math.floor((fh - size) / 2))
-    const sleeveData = new Uint8Array(size * size * 3)
-    for (let y = 0; y < size; y += 1) {
-      for (let x = 0; x < size; x += 1) {
-        const source = ((top + y) * fw + left + x) * 3
-        const target = (y * size + x) * 3
-        const red = data[source] ?? 0
-        const green = data[source + 1] ?? 0
-        const blue = data[source + 2] ?? 0
-        const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        sleeveData[target] = boostChannel(red, luma)
-        sleeveData[target + 1] = boostChannel(green, luma)
-        sleeveData[target + 2] = boostChannel(blue, luma)
+
+  // Sample every 2nd cell in both axes, then replicate to neighbours.
+  // This reduces the cell count from ~3000 to ~750 on a 120x38 terminal.
+  const step = 2
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      if (mask(x, y)) continue
+      const nx = ((x + 0.5) / width) * 2 - 1
+      const ny = ((y + 0.5) / height) * 2 - 1
+      // Stronger vignette: centre stays vivid, edges (prompt area) fade to ~15%.
+      const vignette = 0.55 + 0.45 * (1 - Math.min(1, (nx * nx + ny * ny) / 1.8))
+      const [red, green, blue] = bilinear(
+        data,
+        fw,
+        fh,
+        ((x + 0.5) / width) * fw - 0.5,
+        ((y + 0.5) / height) * fh - 0.5,
+      )
+      const [er, eg, eb] = enrich(red * vignette, green * vignette, blue * vignette)
+      const color = `#${byteHex(er)}${byteHex(eg)}${byteHex(eb)}`
+      // Replicate to the 2x2 block
+      for (let dy = 0; dy < step; dy += 1) {
+        for (let dx = 0; dx < step; dx += 1) {
+          const cx = x + dx
+          const cy = y + dy
+          if (cx >= width || cy >= height) continue
+          if (mask(cx, cy)) continue
+          cells.push({ cx, cy, color })
+        }
       }
     }
-    const image: ArtImage = {
-      key,
-      width: fw,
-      height: fh,
-      data,
-      sleeve: { size, data: sleeveData },
-    }
-    artImageCache = { key, image }
-    return image
-  } catch {
-    return null
   }
+  return cells
 }
 
 function ArtCanvas(props: any) {
@@ -871,12 +882,13 @@ function CoverArt() {
         }
       }
 
-      // Album art from the now-playing daemon. The ambient wash is sampled from
-      // the daemon's already-blurred frame and painted as tinted space cells, so
-      // glyphs are never replaced. It stays on every route, including sessions.
+      // Album art from the now-playing daemon. Sampled at a reduced grid and
+      // upscaled, with a strong vignette that naturally fades where text lives
+      // (prompt, tabs, footer). No per-cell scrim blocks — the vignette keeps
+      // glyphs readable while the cover stays vivid in open space.
       const cells = musicCells()
       const alpha = musicAlpha()
-      const ambientAlpha = clamp(alpha, 0, 0.6)
+      const ambientAlpha = clamp(alpha, 0, 0.55)
       const shadow = musicShadow()
       const sleeve = musicCard()
       const layout = cardLayout(width, height)
@@ -895,24 +907,17 @@ function CoverArt() {
           musicCacheAlpha = ambientAlpha
           musicColorCache = new Map()
         }
-        const scrim = packColor("#000000", 0.5)
         for (const cell of cells) {
-          // Glyph cells get a dark scrim instead of the cover. The art stays
-          // vivid in open space, while every character keeps a dark, stable
-          // background no matter how bright the album cover is.
-          if (hasText(cell.x, cell.y)) {
-            buffer.setCellWithAlphaBlending(cell.x, cell.y, " ", transparent, scrim)
-            continue
-          }
+          // Cells with glyphs are already excluded by the mask in buildMusicCells,
+          // but double-check for safety (e.g. prompt moved since last rebuild).
+          if (hasText(cell.cx, cell.cy)) continue
           const key = cell.color
           let bg = musicColorCache.get(key)
           if (!bg) {
             bg = packColor(cell.color, ambientAlpha)
             musicColorCache.set(key, bg)
           }
-          // A space overlay makes OpenTUI blend the art into the cell
-          // background without replacing anything.
-          buffer.setCellWithAlphaBlending(cell.x, cell.y, " ", transparent, bg)
+          buffer.setCellWithAlphaBlending(cell.cx, cell.cy, " ", transparent, bg)
         }
       }
 
@@ -1172,15 +1177,19 @@ function CoverArt() {
 
         // The prompt panel is never painted: it keeps its own background and
         // the question stays exactly as readable as it is without the art.
+        // Also mask the tab bar (top 3 rows), footer (bottom 3 rows), and a
+        // generous halo around the prompt so the vignette can do its job
+        // without any hard scrim blocks.
         const promptOnly: Mask =
           prompt
             ? (x, y) =>
-                x >= prompt.x - 2 &&
-                x <= prompt.x + prompt.width + 2 &&
-                y >= prompt.y - 1 &&
-                y <= prompt.y + prompt.height + 3
+                x >= prompt.x - 4 &&
+                x <= prompt.x + prompt.width + 4 &&
+                y >= prompt.y - 3 &&
+                y <= prompt.y + prompt.height + 5
             : () => false
-        const mask: Mask = (x, y) => y < 2 || y >= rootHeight - 2 || promptOnly(x, y)
+        const mask: Mask = (x, y) =>
+          y < 3 || y >= rootHeight - 3 || promptOnly(x, y)
 
         const layout = `${image.key}:${rootWidth}x${rootHeight}:${prompt?.x ?? -1}:${prompt?.y ?? -1}:${
           prompt?.width ?? 0
