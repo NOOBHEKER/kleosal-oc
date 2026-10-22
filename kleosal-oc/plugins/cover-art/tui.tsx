@@ -93,59 +93,6 @@ function bilinear(
 // ambient layer samples that frame bilinearly at cell centres and applies a
 // soft vignette. No glyphs, no hard card edge: just a smooth, quiet wash of the
 // album's colours behind everything else.
-function buildMusicCells(
-  image: ArtImage,
-  width: number,
-  height: number,
-  mask: Mask,
-): PaintCell[] {
-  const cells: PaintCell[] = []
-  const fw = image.width
-  const fh = image.height
-  if (fw < 1 || fh < 1 || width < 1 || height < 1) return cells
-  const data = image.data
-
-  // Keep the frame's sharp centre. That region is the actual sleeve, and
-  // sampling it directly is what makes the cover recognisable instead of a
-  // vague tint. The daemon has already blur-extended the outer area, so the
-  // art still fades smoothly into the terminal at the edges.
-  //
-  // A gentle saturation lift keeps the cover from turning into grey mud on a
-  // dark theme. Readability is handled separately: paint() never draws art on
-  // a cell that already holds a glyph.
-  const enrich = (red: number, green: number, blue: number) => {
-    const gray = (red + green + blue) / 3
-    return [
-      clamp(gray + (red - gray) * 1.16, 0, 255),
-      clamp(gray + (green - gray) * 1.16, 0, 255),
-      clamp(gray + (blue - gray) * 1.16, 0, 255),
-    ]
-  }
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      if (mask(x, y)) continue
-      const nx = ((x + 0.5) / width) * 2 - 1
-      const ny = ((y + 0.5) / height) * 2 - 1
-      const vignette = 0.82 + 0.18 * (1 - Math.min(1, (nx * nx + ny * ny) / 2))
-      const [red, green, blue] = bilinear(
-        data,
-        fw,
-        fh,
-        ((x + 0.5) / width) * fw - 0.5,
-        ((y + 0.5) / height) * fh - 0.5,
-      )
-      const [er, eg, eb] = enrich(red * vignette, green * vignette, blue * vignette)
-      cells.push({
-        x,
-        y,
-        color: `#${byteHex(er)}${byteHex(eg)}${byteHex(eb)}`,
-      })
-    }
-  }
-  return cells
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
@@ -522,65 +469,84 @@ function boostChannel(value: number, luma: number) {
   return clamp(Math.round(contrasted + 2), 0, 255)
 }
 
-// Build the ambient cover cells once per layout change. We sample at a reduced
-// grid (every 2nd cell) and upscale, which cuts the paint calls by ~75% while
-// still looking smooth because the daemon frame is already blurred. A subtle
-// vignette keeps the centre bright and the edges (where text lives) darker,
-// so glyphs stay readable without any per-cell scrim blocks.
-function buildMusicCells(
-  image: ArtImage,
-  width: number,
-  height: number,
-  mask: Mask,
-): PaintCell[] {
-  const cells: PaintCell[] = []
-  const fw = image.width
-  const fh = image.height
-  if (fw < 1 || fh < 1 || width < 1 || height < 1) return cells
-  const data = image.data
-
-  // Gentle saturation lift keeps the cover from turning into grey mud.
-  const enrich = (red: number, green: number, blue: number) => {
-    const gray = (red + green + blue) / 3
-    return [
-      clamp(gray + (red - gray) * 1.16, 0, 255),
-      clamp(gray + (green - gray) * 1.16, 0, 255),
-      clamp(gray + (blue - gray) * 1.16, 0, 255),
-    ]
-  }
-
-  // Sample every 2nd cell in both axes, then replicate to neighbours.
-  // This reduces the cell count from ~3000 to ~750 on a 120x38 terminal.
-  const step = 2
-  for (let y = 0; y < height; y += step) {
-    for (let x = 0; x < width; x += step) {
-      if (mask(x, y)) continue
-      const nx = ((x + 0.5) / width) * 2 - 1
-      const ny = ((y + 0.5) / height) * 2 - 1
-      // Stronger vignette: centre stays vivid, edges (prompt area) fade to ~15%.
-      const vignette = 0.55 + 0.45 * (1 - Math.min(1, (nx * nx + ny * ny) / 1.8))
-      const [red, green, blue] = bilinear(
-        data,
-        fw,
-        fh,
-        ((x + 0.5) / width) * fw - 0.5,
-        ((y + 0.5) / height) * fh - 0.5,
-      )
-      const [er, eg, eb] = enrich(red * vignette, green * vignette, blue * vignette)
-      const color = `#${byteHex(er)}${byteHex(eg)}${byteHex(eb)}`
-      // Replicate to the 2x2 block
-      for (let dy = 0; dy < step; dy += 1) {
-        for (let dx = 0; dx < step; dx += 1) {
-          const cx = x + dx
-          const cy = y + dy
-          if (cx >= width || cy >= height) continue
-          if (mask(cx, cy)) continue
-          cells.push({ cx, cy, color })
-        }
-      }
+// Simple backdrop: compute a single dominant colour from the frame and
+// render one full-screen box at zIndex 0. No per-cell painting, no
+// readability hacks — text components keep their own backgrounds.
+function dominantColor(image: ArtImage): string {
+  const { data, width: fw, height: fh } = image
+  if (!data || fw < 1 || fh < 1) return "#1a1c24"
+  let r = 0, g = 0, b = 0, count = 0
+  // Sample a coarse grid (every 8th pixel) for speed
+  for (let y = 0; y < fh; y += 8) {
+    const row = y * fw * 3
+    for (let x = 0; x < fw; x += 8) {
+      const i = row + x * 3
+      r += data[i] ?? 0
+      g += data[i + 1] ?? 0
+      b += data[i + 2] ?? 0
+      count += 1
     }
   }
-  return cells
+  if (!count) return "#1a1c24"
+  r = Math.round(r / count)
+  g = Math.round(g / count)
+  b = Math.round(b / count)
+  // Gentle lift so it's not pure mud on dark themes
+  const gray = (r + g + b) / 3
+  r = clamp(gray + (r - gray) * 1.2, 0, 255)
+  g = clamp(gray + (g - gray) * 1.2, 0, 255)
+  b = clamp(gray + (b - gray) * 1.2, 0, 255)
+  return `#${byteHex(r)}${byteHex(g)}${byteHex(b)}`
+}
+
+function loadArtImage(nowPlaying: any): ArtImage | null {
+  if (!nowPlaying?.framePath || !nowPlaying.frameWidth || !nowPlaying.frameHeight) return null
+  let mtime: number
+  try {
+    mtime = statSync(nowPlaying.framePath).mtimeMs
+  } catch {
+    return null
+  }
+  const key = `${nowPlaying.framePath}:${mtime}:${nowPlaying.frameWidth}x${nowPlaying.frameHeight}`
+  if (artImageCache?.key === key) return artImageCache.image
+  try {
+    const raw = readFileSync(nowPlaying.framePath)
+    const expected = nowPlaying.frameWidth * nowPlaying.frameHeight * 3
+    if (raw.length < expected) return null
+    const data = new Uint8Array(raw.buffer, raw.byteOffset, expected)
+    const fw = nowPlaying.frameWidth
+    const fh = nowPlaying.frameHeight
+    // Extract and pre-tone the sharp square once per frame instead of doing it
+    // for every cell on every animation tick.
+    const size = Math.max(16, Math.round(fh * 0.72))
+    const left = Math.max(0, Math.floor((fw - size) / 2))
+    const top = Math.max(0, Math.floor((fh - size) / 2))
+    const sleeveData = new Uint8Array(size * size * 3)
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const source = ((top + y) * fw + left + x) * 3
+        const target = (y * size + x) * 3
+        const red = data[source] ?? 0
+        const green = data[source + 1] ?? 0
+        const blue = data[source + 2] ?? 0
+        const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        sleeveData[target] = boostChannel(red, luma)
+        sleeveData[target + 1] = boostChannel(green, luma)
+        sleeveData[target + 2] = boostChannel(blue, luma)
+      }
+    }
+    const image: ArtImage = {
+      key,
+      width: fw,
+      height: fh,
+      data,
+      sleeve: { size, data: sleeveData },
+    }
+    artImageCache = { key, image }
+    return image
+  } catch {
+    return null
+  }
 }
 
 function ArtCanvas(props: any) {
@@ -630,7 +596,6 @@ function CoverArt() {
   const [matrixOn, setMatrixOn] = createSignal(false)
   const [artOn, setArtOn] = createSignal(false)
   const [musicOn, setMusicOn] = createSignal(false)
-  const [musicCells, setMusicCells] = createSignal<PaintCell[]>([])
   const [musicCard, setMusicCard] = createSignal<PaintSleeveCell[]>([])
   const [musicShadow, setMusicShadow] = createSignal<PaintCell[]>([])
   const [musicAlpha, setMusicAlpha] = createSignal(0)
@@ -652,8 +617,6 @@ function CoverArt() {
   // 0..1, eased every tick: full while playing, dimmed while paused, zero when
   // idle. Keeping a dim level means a pause no longer makes the art vanish.
   let musicLevel = 0
-  let musicCacheAlpha = -1
-  let musicColorCache = new Map<string, any>()
   let cardCacheAlpha = -1
   let cardColorCache = new Map<string, any>()
   let shadowCacheAlpha = -1
@@ -690,7 +653,6 @@ function CoverArt() {
 
   const clearMusic = () => {
     setMusicOn(false)
-    setMusicCells([])
     setMusicCard([])
     setMusicShadow([])
     setMusicAlpha(0)
@@ -797,27 +759,6 @@ function CoverArt() {
       // have to be erased explicitly when the widget goes away. Restore the
       // ambient colour where the wash is still running, otherwise use the dark
       // home background.
-      const clearCardText = () => {
-        if (!lastCardCells.size) return
-        const cellsNow = musicCells()
-        const alphaNow = musicAlpha()
-        const ambient = alphaNow > 0 ? clamp(alphaNow, 0, 0.34) : 0
-        const remaining = new Set(lastCardCells)
-        if (ambient > 0) {
-          for (const cell of cellsNow) {
-            const key = cell.y * width + cell.x
-            if (!remaining.has(key)) continue
-            remaining.delete(key)
-            wipe(cell.x, cell.y, packColor(cell.color, ambient))
-          }
-        }
-        for (const key of remaining) {
-          const x = key % width
-          const y = Math.floor(key / width)
-          if (x >= 0 && y >= 0 && x < width && y < height) wipe(x, y, packColor("#101218", 1))
-        }
-        lastCardCells.clear()
-      }
       if (!configValue.enabled) {
         restoreWidget()
         return
@@ -882,13 +823,11 @@ function CoverArt() {
         }
       }
 
-      // Album art from the now-playing daemon. Sampled at a reduced grid and
-      // upscaled, with a strong vignette that naturally fades where text lives
-      // (prompt, tabs, footer). No per-cell scrim blocks — the vignette keeps
-      // glyphs readable while the cover stays vivid in open space.
-      const cells = musicCells()
+      // Album art backdrop: a single full-screen colour wash at z-index 0.
+      // No per-cell painting, no readability hacks — text components keep
+      // their own backgrounds. The widget (card) is still painted below.
       const alpha = musicAlpha()
-      const ambientAlpha = clamp(alpha, 0, 0.55)
+      const ambientAlpha = clamp(alpha, 0, 0.5)
       const shadow = musicShadow()
       const sleeve = musicCard()
       const layout = cardLayout(width, height)
@@ -902,22 +841,23 @@ function CoverArt() {
           }
         }
       }
-      if (cells.length && ambientAlpha > 0) {
-        if (musicCacheAlpha !== ambientAlpha) {
-          musicCacheAlpha = ambientAlpha
-          musicColorCache = new Map()
-        }
-        for (const cell of cells) {
-          // Cells with glyphs are already excluded by the mask in buildMusicCells,
-          // but double-check for safety (e.g. prompt moved since last rebuild).
-          if (hasText(cell.cx, cell.cy)) continue
-          const key = cell.color
-          let bg = musicColorCache.get(key)
-          if (!bg) {
-            bg = packColor(cell.color, ambientAlpha)
-            musicColorCache.set(key, bg)
+      if (ambientAlpha > 0.01) {
+        // Paint a single solid background for the entire terminal.
+        // This is ONE draw call instead of thousands.
+        const np = nowPlaying()
+        const image = np ? loadArtImage(np) : null
+        if (image) {
+          const bgColor = dominantColor(image)
+          const bg = packColor(bgColor, ambientAlpha)
+          // Fill the whole buffer with the backdrop colour
+          const buffers = buffer.buffers
+          const count = width * height
+          for (let i = 0; i < count; i += 1) {
+            buffers.bg[i * 4] = bg.buffer[0]
+            buffers.bg[i * 4 + 1] = bg.buffer[1]
+            buffers.bg[i * 4 + 2] = bg.buffer[2]
+            buffers.bg[i * 4 + 3] = bg.buffer[3]
           }
-          buffer.setCellWithAlphaBlending(cell.cx, cell.cy, " ", transparent, bg)
         }
       }
 
@@ -1196,7 +1136,6 @@ function CoverArt() {
         }:${prompt?.height ?? 0}`
         if (layout !== musicLayoutKey) {
           musicLayoutKey = layout
-          setMusicCells(buildMusicCells(image, rootWidth, rootHeight, mask))
         }
 
         const host: any = plugin.renderer
@@ -1242,7 +1181,7 @@ function CoverArt() {
       }
     }
     if (!musicVisible) {
-      if (musicOn() || musicCells().length || musicCard().length) {
+      if (musicOn() || musicCard().length) {
         clearMusic()
         try {
           plugin.renderer?.requestRender?.()
