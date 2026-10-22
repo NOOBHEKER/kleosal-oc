@@ -700,6 +700,10 @@ function CoverArt() {
   // top-right corner, so these have to be erased explicitly when the widget
   // fades out or the track stops, otherwise the text would ghost on screen.
   let lastCardCells = new Set<number>()
+  // Exact pre-widget cells, so fading the card out restores the home screen
+  // instead of leaving a dark shadow rectangle behind.
+  type SavedWidgetCell = { char: number; fg: Uint16Array; bg: Uint16Array; attributes: number }
+  const savedWidget = new Map<number, SavedWidgetCell>()
 
   const restore = () => {
     if (!logo) return
@@ -786,6 +790,37 @@ function CoverArt() {
           if (typeof buffer.setCell === "function") buffer.setCell(x, y, " ", transparent, bg)
         } catch {}
       }
+      const restoreWidget = () => {
+        if (!savedWidget.size) return
+        try {
+          const b = buffer.buffers
+          for (const [key, saved] of savedWidget) {
+            b.char[key] = saved.char
+            b.attributes[key] = saved.attributes
+            const i = key * 4
+            for (let c = 0; c < 4; c += 1) {
+              b.fg[i + c] = saved.fg[c]
+              b.bg[i + c] = saved.bg[c]
+            }
+          }
+        } catch {}
+        savedWidget.clear()
+      }
+      const saveWidgetCell = (x: number, y: number) => {
+        if (x < 0 || y < 0 || x >= width || y >= height) return
+        const key = y * width + x
+        if (savedWidget.has(key)) return
+        try {
+          const b = buffer.buffers
+          const i = key * 4
+          savedWidget.set(key, {
+            char: b.char[key],
+            fg: b.fg.slice(i, i + 4),
+            bg: b.bg.slice(i, i + 4),
+            attributes: b.attributes[key],
+          })
+        } catch {}
+      }
       // The app does not repaint the empty top-right corner, so widget glyphs
       // have to be erased explicitly when the widget goes away. Restore the
       // ambient colour where the wash is still running, otherwise use the dark
@@ -812,14 +847,17 @@ function CoverArt() {
         lastCardCells.clear()
       }
       if (!configValue.enabled) {
-        clearCardText()
+        restoreWidget()
         return
       }
       if (modalOpen()) return
+      // Put the previous widget's cells back before sampling the app's own
+      // content, then save the new cells before the ambient wash paints.
+      restoreWidget()
       // Nothing to paint when the rain, wordmark and music are all idle. This
       // keeps session pages with no track playing completely untouched.
       if (!musicOn() && !matrixOn() && artGlyphs().length === 0) {
-        clearCardText()
+        restoreWidget()
         return
       }
       // Snapshot which cells already hold a glyph before painting anything. The
@@ -878,6 +916,19 @@ function CoverArt() {
       const cells = musicCells()
       const alpha = musicAlpha()
       const ambientAlpha = clamp(alpha, 0, 0.34)
+      const shadow = musicShadow()
+      const sleeve = musicCard()
+      const layout = cardLayout(width, height)
+      const cardAlpha = cardOpacity(alpha) * cardFade
+      if (cardAlpha > 0 && (shadow.length || sleeve.length)) {
+        for (const cell of shadow) saveWidgetCell(cell.x, cell.y)
+        for (const cell of sleeve) saveWidgetCell(cell.x, cell.y)
+        if (layout) {
+          for (let y = layout.y0; y < layout.y0 + layout.h; y += 1) {
+            for (let x = layout.x0; x < layout.x0 + layout.w; x += 1) saveWidgetCell(x, y)
+          }
+        }
+      }
       if (cells.length && ambientAlpha > 0) {
         if (musicCacheAlpha !== ambientAlpha) {
           musicCacheAlpha = ambientAlpha
@@ -903,8 +954,6 @@ function CoverArt() {
       // The compact card is the one deliberate focal point. It lives in the
       // empty top-right corner on the home screen and eases out (while the
       // ambient stays behind the session) as soon as a session opens.
-      const cardAlpha = cardOpacity(alpha) * cardFade
-      const shadow = musicShadow()
       if (shadow.length && cardAlpha > 0) {
         if (shadowCacheAlpha !== cardAlpha) {
           shadowCacheAlpha = cardAlpha
@@ -924,7 +973,6 @@ function CoverArt() {
         }
       }
 
-      const sleeve = musicCard()
       if (sleeve.length && cardAlpha > 0) {
         if (cardCacheAlpha !== cardAlpha) {
           cardCacheAlpha = cardAlpha
@@ -950,7 +998,6 @@ function CoverArt() {
         // only painted in the empty top-right chrome; a cell that already holds
         // app text is left alone so no UI character can be overwritten.
         const painted = new Set<number>()
-        const layout = cardLayout(width, height)
         if (layout) {
           const textAlpha = clamp(cardAlpha, 0, 1)
           const truncate = (text: string) => {
@@ -959,8 +1006,9 @@ function CoverArt() {
             if (layout.maxChars <= 1) return ["…"]
             return [...chars.slice(0, layout.maxChars - 1), "…"]
           }
-          const putText = (x: number, y: number, text: string, color: string) => {
+          const putText = (x: number, y: number, text: string, color: string, alphaOverride?: number) => {
             const chars = truncate(text)
+            const alpha = clamp(alphaOverride ?? textAlpha, 0, 1)
             for (let i = 0; i < chars.length; i += 1) {
               const cx = x + i
               if (cx >= width || cx > layout.x0 + layout.w - 2 || y < 0 || y >= height) break
@@ -969,7 +1017,7 @@ function CoverArt() {
                 cx,
                 y,
                 chars[i],
-                packColor(color, textAlpha),
+                packColor(color, alpha),
                 transparent,
               )
               painted.add(y * width + cx)
@@ -980,7 +1028,13 @@ function CoverArt() {
           const album = String(cardMeta.album).replace(/[\r\n\t]+/g, " ").trim()
           const albumFits = Array.from(album).length <= layout.maxChars
           const statusLine = cardMeta.paused ? "Paused" : albumFits ? album || "Now playing" : "Now playing"
-          putText(layout.textX, layout.albumY, statusLine, "#7f8b9e")
+          putText(
+            layout.textX,
+            layout.albumY,
+            statusLine,
+            cardMeta.paused ? "#dbe4f0" : "#7f8b9e",
+            cardMeta.paused ? Math.max(textAlpha, 0.72) : textAlpha,
+          )
 
           const filled = Math.round(layout.barW * clamp(cardMeta.progress, 0, 1))
           for (let i = 0; i < layout.barW; i += 1) {
@@ -1011,7 +1065,7 @@ function CoverArt() {
         }
         lastCardCells = painted
       } else {
-        clearCardText()
+        restoreWidget()
       }
 
       // The custom wordmark is painted here, after the rain and after every
